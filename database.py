@@ -48,10 +48,22 @@ async def init_database() -> None:
                 chat_id INTEGER NOT NULL,
                 status TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-                UNIQUE(chat_id)
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
+            """
+        )
+
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_games_chat_id
+            ON games(chat_id)
+            """
+        )
+
+        await db.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_games_chat_status
+            ON games(chat_id, status)
             """
         )
 
@@ -66,6 +78,7 @@ async def get_connection() -> aiosqlite.Connection:
         database_path.parent.mkdir(parents=True, exist_ok=True)
 
     db = await aiosqlite.connect(database_path)
+
     await db.execute("PRAGMA foreign_keys = ON")
     await db.execute("PRAGMA busy_timeout = 5000")
 
