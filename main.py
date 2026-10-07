@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 
 from config import BOT_TOKEN
 from database import init_database
+from handlers import start_router
 
 
 def setup_logging() -> None:
@@ -41,6 +42,8 @@ async def main() -> None:
     )
 
     dp = Dispatcher()
+
+    dp.include_router(start_router)
 
     logger.info("Starting THRONE bot...")
 
