@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
+from game_controller import start_first_night
 from game_engine import PlayerState
 from game_messages import (
     game_full_message,
@@ -220,7 +221,7 @@ async def players_handler(
 async def start_game_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Start the game and privately send roles."""
+    """Start the game, send roles privately, and start the first night."""
 
     if callback.message is None:
         await callback.answer()
@@ -300,6 +301,16 @@ async def start_game_handler(
         await message.answer(
             "⚔️ <b>O‘yin boshlandi!</b>\n\n"
             "📜 Barcha rollar o‘yinchilarga shaxsiy xabarda yuborildi."
+        )
+
+    night_started = await start_first_night(
+        bot=message.bot,
+        game=result.game,
+    )
+
+    if not night_started:
+        await message.answer(
+            "⚠️ Birinchi tunni boshlashda xatolik yuz berdi."
         )
 
 
@@ -426,4 +437,4 @@ async def stop_game_handler(
 
     await message.edit_text(
         game_stopped_message()
-        )
+    )
