@@ -9,6 +9,7 @@ from game_state import (
     MAX_PLAYERS,
     MIN_PLAYERS,
 )
+from role_assignment import assign_roles
 
 
 @dataclass(frozen=True, slots=True)
@@ -138,7 +139,7 @@ class GameService:
         return MIN_PLAYERS <= game.player_count() <= MAX_PLAYERS
 
     def start_game(self, chat_id: int) -> ServiceResult:
-        """Move a valid lobby into the role-reveal phase."""
+        """Assign roles and move the lobby into role reveal."""
 
         game = self.get_game(chat_id)
 
@@ -152,6 +153,15 @@ class GameService:
             return ServiceResult(
                 success=False,
                 message="not_enough_players",
+                game=game,
+            )
+
+        try:
+            assign_roles(game)
+        except ValueError as error:
+            return ServiceResult(
+                success=False,
+                message=str(error),
                 game=game,
             )
 
