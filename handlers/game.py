@@ -4,6 +4,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
+from game_actions import ActionType, create_action
 from game_controller import start_first_night
 from game_engine import PlayerState
 from game_messages import (
@@ -19,8 +20,9 @@ from game_messages import (
     target_not_found_message,
 )
 from game_service import game_service
-from game_state import MAX_PLAYERS, MIN_PLAYERS
-from keyboards import lobby_keyboard
+from game_state import GamePhase, MAX_PLAYERS, MIN_PLAYERS
+from keyboards import lobby_keyboard, night_action_keyboard, target_keyboard
+from role_engine import build_role_runtime_info
 from role_notifications import send_roles_to_all_players
 from vote_system import vote_system
 
@@ -46,6 +48,104 @@ async def _is_chat_admin(
     )
 
     return member.status in {"administrator", "creator"}
+
+
+def _display_name(player: PlayerState) -> str:
+    """Return a safe display name."""
+
+    return player.display_name or (
+        f"User {player.user_id}"
+    )
+
+
+def _get_alive_targets(
+    game,
+    actor_id: int,
+) -> list[tuple[int, str]]:
+    """Return living players except the actor."""
+
+    targets: list[tuple[int, str]] = []
+
+    for player in game.alive_players():
+        if player.user_id == actor_id:
+            continue
+
+        targets.append(
+            (
+                player.user_id,
+                _display_name(player),
+            )
+        )
+
+    return targets
+
+
+def _action_label(action_type: ActionType) -> str:
+    """Return the button text for a night action."""
+
+    labels = {
+        ActionType.OBSERVE: "👁 Kuzatish",
+        ActionType.PROTECT: "🛡 Himoya",
+        ActionType.BLOCK: "🔒 Bloklash",
+        ActionType.POISON: "☠️ Zaharlash",
+        ActionType.WEAKEN: "🩸 Zaiflashtirish",
+        ActionType.ATTACK: "⚔️ Hujum",
+        ActionType.SPECIAL: "✨ Maxsus",
+    }
+
+    return labels[action_type]
+
+
+async def _send_night_actions(
+    bot,
+    game,
+) -> None:
+    """
+    Send each living player the actions allowed by their role.
+
+    The actual action is submitted later through callback buttons.
+    """
+
+    for player in game.alive_players():
+        runtime_info = build_role_runtime_info(player)
+
+        if runtime_info is None:
+            continue
+
+        buttons: list[tuple[str, str]] = []
+
+        for rule in runtime_info.action_rules:
+            buttons.append(
+                (
+                    _action_label(rule.action_type),
+                    (
+                        "throne:night:"
+                        f"{rule.action_type.value}:"
+                        f"{1 if rule.requires_target else 0}"
+                    ),
+                )
+            )
+
+        if not buttons:
+            await bot.send_message(
+                chat_id=player.user_id,
+                text=(
+                    "🌙 <b>Tun boshlandi.</b>\n\n"
+                    "Sizning rolingizda bu tun uchun "
+                    "faol tungi qobiliyat mavjud emas."
+                ),
+            )
+            continue
+
+        await bot.send_message(
+            chat_id=player.user_id,
+            text=(
+                "🌙 <b>Tun boshlandi.</b>\n\n"
+                "Sizning rolingiz uchun mavjud tungi "
+                "harakatni tanlang:"
+            ),
+            reply_markup=night_action_keyboard(buttons),
+        )
 
 
 @router.message(Command("newgame"))
@@ -204,7 +304,7 @@ async def players_handler(
         return
 
     players = "\n".join(
-        f"• {player.display_name}"
+        f"• {_display_name(player)}"
         for player in game.players.values()
     )
 
@@ -221,7 +321,7 @@ async def players_handler(
 async def start_game_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Start the game, send roles privately, and start the first night."""
+    """Start the game and send roles privately."""
 
     if callback.message is None:
         await callback.answer()
@@ -312,6 +412,317 @@ async def start_game_handler(
         await message.answer(
             "⚠️ Birinchi tunni boshlashda xatolik yuz berdi."
         )
+        return
+
+    await _send_night_actions(
+        bot=message.bot,
+        game=result.game,
+    )
+
+
+@router.callback_query(
+    F.data.startswith("throne:night:")
+)
+async def night_action_handler(
+    callback: CallbackQuery,
+) -> None:
+    """
+    Handle selection of a night action.
+
+    First the player chooses the action.
+    If it needs a target, a second keyboard with living
+    targets is shown.
+    """
+
+    if callback.message is None:
+        await callback.answer()
+        return
+
+    data = callback.data
+
+    if data is None:
+        await callback.answer(
+            "⚠️ Harakat ma'lumotlari topilmadi.",
+            show_alert=True,
+        )
+        return
+
+    parts = data.split(":")
+
+    if len(parts) != 4:
+        await callback.answer(
+            "⚠️ Harakat ma'lumotlari noto‘g‘ri.",
+            show_alert=True,
+        )
+        return
+
+    _, _, action_value, requires_target_value = parts
+
+    try:
+        action_type = ActionType(action_value)
+        requires_target = requires_target_value == "1"
+    except ValueError:
+        await callback.answer(
+            "⚠️ Noma'lum tungi harakat.",
+            show_alert=True,
+        )
+        return
+
+    user_id = callback.from_user.id
+
+    # Private action messages are intentionally accepted here.
+    # The group chat is not used for secret night actions.
+    game = None
+
+    for candidate in game_service._games.values():
+        if candidate.get_player(user_id) is not None:
+            if candidate.phase == GamePhase.NIGHT:
+                game = candidate
+                break
+
+    if game is None:
+        await callback.answer(
+            "🌙 Hozir siz uchun faol tun topilmadi.",
+            show_alert=True,
+        )
+        return
+
+    player = game.get_player(user_id)
+
+    if player is None or not player.alive:
+        await callback.answer(
+            "Siz bu vaqtda harakat qila olmaysiz.",
+            show_alert=True,
+        )
+        return
+
+    runtime_info = build_role_runtime_info(player)
+
+    if runtime_info is None:
+        await callback.answer(
+            "⚠️ Roli aniqlanmadi.",
+            show_alert=True,
+        )
+        return
+
+    allowed_rule = next(
+        (
+            rule
+            for rule in runtime_info.action_rules
+            if rule.action_type == action_type
+        ),
+        None,
+    )
+
+    if allowed_rule is None:
+        await callback.answer(
+            "⚠️ Bu harakat sizning rolingizga tegishli emas.",
+            show_alert=True,
+        )
+        return
+
+    if allowed_rule.requires_target != requires_target:
+        await callback.answer(
+            "⚠️ Harakat ma'lumotlari mos kelmadi.",
+            show_alert=True,
+        )
+        return
+
+    if not requires_target:
+        action = create_action(
+            actor_id=user_id,
+            action_type=action_type,
+        )
+
+        from game_flow import game_flow
+
+        result = game_flow.submit_night_action(
+            game=game,
+            action=action,
+        )
+
+        if not result.success:
+            await callback.answer(
+                "⚠️ Harakatni qabul qilib bo‘lmadi.",
+                show_alert=True,
+            )
+            return
+
+        await callback.answer(
+            "✅ Tungi harakatingiz qabul qilindi."
+        )
+
+        await callback.message.edit_text(
+            "🌙 <b>Tungi harakat tanlandi.</b>\n\n"
+            f"⚔️ Harakat: <b>{_action_label(action_type)}</b>\n\n"
+            "Natija tun yakunida aniqlanadi."
+        )
+        return
+
+    targets = _get_alive_targets(
+        game=game,
+        actor_id=user_id,
+    )
+
+    if not targets:
+        await callback.answer(
+            "⚠️ Hozir nishon mavjud emas.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+
+    await callback.message.edit_text(
+        "🌙 <b>Nishonni tanlang:</b>",
+        reply_markup=target_keyboard(
+            targets=targets,
+            callback_prefix=(
+                f"throne:nighttarget:{action_type.value}"
+            ),
+        ),
+    )
+
+
+@router.callback_query(
+    F.data.startswith("throne:nighttarget:")
+)
+async def night_target_handler(
+    callback: CallbackQuery,
+) -> None:
+    """Save a targeted night action."""
+
+    if callback.message is None:
+        await callback.answer()
+        return
+
+    data = callback.data
+
+    if data is None:
+        await callback.answer(
+            "⚠️ Nishon ma'lumotlari topilmadi.",
+            show_alert=True,
+        )
+        return
+
+    parts = data.split(":")
+
+    if len(parts) != 4:
+        await callback.answer(
+            "⚠️ Nishon ma'lumotlari noto‘g‘ri.",
+            show_alert=True,
+        )
+        return
+
+    _, _, action_value, target_value = parts
+
+    try:
+        action_type = ActionType(action_value)
+        target_id = int(target_value)
+    except ValueError:
+        await callback.answer(
+            "⚠️ Nishon ma'lumotlari noto‘g‘ri.",
+            show_alert=True,
+        )
+        return
+
+    user_id = callback.from_user.id
+
+    game = None
+
+    for candidate in game_service._games.values():
+        if candidate.get_player(user_id) is not None:
+            if candidate.phase == GamePhase.NIGHT:
+                game = candidate
+                break
+
+    if game is None:
+        await callback.answer(
+            "🌙 Faol tun topilmadi.",
+            show_alert=True,
+        )
+        return
+
+    actor = game.get_player(user_id)
+
+    if actor is None or not actor.alive:
+        await callback.answer(
+            "Siz bu vaqtda harakat qila olmaysiz.",
+            show_alert=True,
+        )
+        return
+
+    target = game.get_player(target_id)
+
+    if target is None:
+        await callback.answer(
+            target_not_found_message(),
+            show_alert=True,
+        )
+        return
+
+    if not target.alive:
+        await callback.answer(
+            target_not_alive_message(),
+            show_alert=True,
+        )
+        return
+
+    runtime_info = build_role_runtime_info(actor)
+
+    if runtime_info is None:
+        await callback.answer(
+            "⚠️ Roli aniqlanmadi.",
+            show_alert=True,
+        )
+        return
+
+    allowed_rule = next(
+        (
+            rule
+            for rule in runtime_info.action_rules
+            if rule.action_type == action_type
+        ),
+        None,
+    )
+
+    if allowed_rule is None or not allowed_rule.requires_target:
+        await callback.answer(
+            "⚠️ Bu harakatdan foydalanib bo‘lmaydi.",
+            show_alert=True,
+        )
+        return
+
+    action = create_action(
+        actor_id=user_id,
+        action_type=action_type,
+        target_id=target_id,
+    )
+
+    from game_flow import game_flow
+
+    result = game_flow.submit_night_action(
+        game=game,
+        action=action,
+    )
+
+    if not result.success:
+        await callback.answer(
+            "⚠️ Tungi harakatni qabul qilib bo‘lmadi.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer(
+        "✅ Tungi harakatingiz qabul qilindi."
+    )
+
+    await callback.message.edit_text(
+        "🌙 <b>Tungi harakat qabul qilindi.</b>\n\n"
+        f"⚔️ Harakat: <b>{_action_label(action_type)}</b>\n"
+        f"🎯 Nishon: <b>{_display_name(target)}</b>\n\n"
+        "Natija tun yakunida aniqlanadi."
+    )
 
 
 @router.callback_query(F.data.startswith("throne:vote:"))
@@ -393,7 +804,7 @@ async def vote_handler(
         return
 
     await callback.answer(
-        f"⚖️ {target.display_name} uchun ovozingiz qabul qilindi."
+        f"⚖️ {_display_name(target)} uchun ovozingiz qabul qilindi."
     )
 
 
@@ -431,10 +842,4 @@ async def stop_game_handler(
         )
         return
 
-    await callback.answer(
-        "O‘yin to‘xtatildi."
-    )
-
-    await message.edit_text(
-        game_stopped_message()
-    )
+    await callback.
