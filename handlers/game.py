@@ -7,25 +7,24 @@ from aiogram.types import CallbackQuery, Message
 from game_engine import PlayerState
 from game_messages import (
     game_full_message,
-    game_not_started_message,
-    game_started_message,
     game_stopped_message,
+    game_started_message,
     lobby_message,
     not_enough_players_message,
     permission_denied_message,
     player_already_joined_message,
     player_joined_message,
+    role_reveal_message,
 )
 from game_service import game_service
 from game_state import MAX_PLAYERS, MIN_PLAYERS
 from keyboards import lobby_keyboard
+from role_notifications import send_roles_to_all_players
 
 router = Router()
 
 
 def _display_name(message: Message) -> str:
-    """Return a safe display name for a Telegram user."""
-
     user = message.from_user
 
     if user is None:
@@ -38,39 +37,26 @@ def _display_name(message: Message) -> str:
 
 
 def _is_group(message: Message) -> bool:
-    """Return True when the message comes from a group."""
-
-    return message.chat.type in {
-        "group",
-        "supergroup",
-    }
+    return message.chat.type in {"group", "supergroup"}
 
 
 async def _is_chat_admin(
     message: Message,
     user_id: int,
 ) -> bool:
-    """Check whether a Telegram user is an administrator."""
-
     member = await message.bot.get_chat_member(
         chat_id=message.chat.id,
         user_id=user_id,
     )
 
-    return member.status in {
-        "administrator",
-        "creator",
-    }
+    return member.status in {"administrator", "creator"}
 
 
 @router.message(Command("newgame"))
 async def new_game_handler(message: Message) -> None:
-    """Create a new THRONE game in a group."""
-
     if not _is_group(message):
         await message.answer(
-            "⚠️ <b>THRONE</b> o‘yini faqat guruhlarda "
-            "boshlanadi."
+            "⚠️ <b>THRONE</b> o‘yini faqat guruhlarda boshlanadi."
         )
         return
 
@@ -82,7 +68,7 @@ async def new_game_handler(message: Message) -> None:
         message.from_user.id,
     ):
         await message.answer(
-            permission_denied_message(),
+            permission_denied_message()
         )
         return
 
@@ -110,8 +96,6 @@ async def new_game_handler(message: Message) -> None:
 async def join_game_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Join the current group game."""
-
     if callback.message is None:
         await callback.answer()
         return
@@ -130,7 +114,7 @@ async def join_game_handler(
 
     if game.player_count() >= MAX_PLAYERS:
         await callback.answer(
-            "O‘yinchilar soni maksimal chegaraga yetgan.",
+            game_full_message(),
             show_alert=True,
         )
         return
@@ -168,7 +152,7 @@ async def join_game_handler(
         return
 
     await callback.answer(
-        "Siz o‘yinga qo‘shildingiz!",
+        "Siz o‘yinga qo‘shildingiz!"
     )
 
     await callback.message.edit_text(
@@ -185,7 +169,7 @@ async def join_game_handler(
             display_name=player.display_name,
             player_count=result.game.player_count(),
             max_players=MAX_PLAYERS,
-        ),
+        )
     )
 
 
@@ -193,14 +177,12 @@ async def join_game_handler(
 async def players_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Show the current player list."""
-
     if callback.message is None:
         await callback.answer()
         return
 
     game = game_service.get_game(
-        callback.message.chat.id,
+        callback.message.chat.id
     )
 
     if game is None:
@@ -235,8 +217,6 @@ async def players_handler(
 async def start_game_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Start the game. Only group administrators may do this."""
-
     if callback.message is None:
         await callback.answer()
         return
@@ -254,7 +234,9 @@ async def start_game_handler(
         )
         return
 
-    game = game_service.get_game(message.chat.id)
+    game = game_service.get_game(
+        message.chat.id
+    )
 
     if game is None:
         await callback.answer(
@@ -277,7 +259,7 @@ async def start_game_handler(
         chat_id=message.chat.id,
     )
 
-    if not result.success:
+    if not result.success or result.game is None:
         await callback.answer(
             "O‘yinni boshlashda xatolik yuz berdi.",
             show_alert=True,
@@ -285,20 +267,40 @@ async def start_game_handler(
         return
 
     await callback.answer(
-        "O‘yin boshlandi!",
+        "O‘yin boshlandi!"
+    )
+
+    delivery_results = await send_roles_to_all_players(
+        bot=message.bot,
+        game=result.game,
+    )
+
+    failed_count = sum(
+        1
+        for delivered in delivery_results.values()
+        if not delivered
     )
 
     await message.edit_text(
-        game_started_message(),
+        role_reveal_message()
     )
+
+    if failed_count > 0:
+        await message.answer(
+            "📩 Rollar shaxsiy xabarlarga yuborildi.\n\n"
+            "⚠️ Ayrim o‘yinchilarga xabar yuborilmadi. "
+            "Botga <b>/start</b> yuborilganini tekshiring."
+        )
+    else:
+        await message.answer(
+            game_started_message()
+        )
 
 
 @router.callback_query(F.data == "throne:stop")
 async def stop_game_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Stop the current game. Only group administrators may do this."""
-
     if callback.message is None:
         await callback.answer()
         return
@@ -328,9 +330,9 @@ async def stop_game_handler(
         return
 
     await callback.answer(
-        "O‘yin to‘xtatildi.",
+        "O‘yin to‘xtatildi."
     )
 
     await message.edit_text(
-        game_stopped_message(),
-  )
+        game_stopped_message()
+    )
