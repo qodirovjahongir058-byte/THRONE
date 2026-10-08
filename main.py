@@ -10,11 +10,12 @@ from aiogram.enums import ParseMode
 
 from config import BOT_TOKEN
 from database import init_database
-from handlers import start_router
+from handlers import game_router, start_router
 
 
 def setup_logging() -> None:
     """Configure application logging."""
+
     logging.basicConfig(
         level=logging.INFO,
         format=(
@@ -27,6 +28,7 @@ def setup_logging() -> None:
 
 async def main() -> None:
     """Start the THRONE application."""
+
     setup_logging()
 
     logger = logging.getLogger("throne")
@@ -44,6 +46,7 @@ async def main() -> None:
     dp = Dispatcher()
 
     dp.include_router(start_router)
+    dp.include_router(game_router)
 
     logger.info("Starting THRONE bot...")
 
