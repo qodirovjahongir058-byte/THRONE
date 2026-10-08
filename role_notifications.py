@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramForbiddenError, TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from game_engine import GameState
-from game_messages import private_role_message
+from game_messages import partners_message, private_role_message
+from role_partners import get_known_partners
 from roles import get_role
 
 
@@ -13,7 +14,7 @@ async def send_role_to_player(
     game: GameState,
     user_id: int,
 ) -> bool:
-    """Send the assigned role privately to one player."""
+    """Send role and known partner information privately."""
 
     player = game.get_player(user_id)
 
@@ -38,6 +39,17 @@ async def send_role_to_player(
                 victory_condition=role.victory_condition,
             ),
         )
+
+        partners = get_known_partners(
+            game=game,
+            user_id=user_id,
+        )
+
+        await bot.send_message(
+            chat_id=user_id,
+            text=partners_message(partners),
+        )
+
     except (
         TelegramForbiddenError,
         TelegramBadRequest,
@@ -51,7 +63,7 @@ async def send_roles_to_all_players(
     bot: Bot,
     game: GameState,
 ) -> dict[int, bool]:
-    """Send private role messages to every player."""
+    """Send role and partner information to every player."""
 
     results: dict[int, bool] = {}
 
