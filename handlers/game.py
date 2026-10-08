@@ -8,35 +8,28 @@ from game_engine import PlayerState
 from game_messages import (
     game_full_message,
     game_stopped_message,
-    game_started_message,
     lobby_message,
     not_enough_players_message,
     permission_denied_message,
     player_already_joined_message,
     player_joined_message,
     role_reveal_message,
+    target_not_alive_message,
+    target_not_found_message,
 )
 from game_service import game_service
 from game_state import MAX_PLAYERS, MIN_PLAYERS
 from keyboards import lobby_keyboard
 from role_notifications import send_roles_to_all_players
+from vote_system import vote_system
+
 
 router = Router()
 
 
-def _display_name(message: Message) -> str:
-    user = message.from_user
-
-    if user is None:
-        return "O‘yinchi"
-
-    if user.full_name:
-        return user.full_name
-
-    return str(user.id)
-
-
 def _is_group(message: Message) -> bool:
+    """Return True when the message comes from a group."""
+
     return message.chat.type in {"group", "supergroup"}
 
 
@@ -44,6 +37,8 @@ async def _is_chat_admin(
     message: Message,
     user_id: int,
 ) -> bool:
+    """Check whether a user is a group administrator."""
+
     member = await message.bot.get_chat_member(
         chat_id=message.chat.id,
         user_id=user_id,
@@ -53,7 +48,11 @@ async def _is_chat_admin(
 
 
 @router.message(Command("newgame"))
-async def new_game_handler(message: Message) -> None:
+async def new_game_handler(
+    message: Message,
+) -> None:
+    """Create a new THRONE game in a group."""
+
     if not _is_group(message):
         await message.answer(
             "⚠️ <b>THRONE</b> o‘yini faqat guruhlarda boshlanadi."
@@ -96,6 +95,8 @@ async def new_game_handler(message: Message) -> None:
 async def join_game_handler(
     callback: CallbackQuery,
 ) -> None:
+    """Add a user to the current lobby."""
+
     if callback.message is None:
         await callback.answer()
         return
@@ -177,6 +178,8 @@ async def join_game_handler(
 async def players_handler(
     callback: CallbackQuery,
 ) -> None:
+    """Show the current lobby players."""
+
     if callback.message is None:
         await callback.answer()
         return
@@ -217,6 +220,8 @@ async def players_handler(
 async def start_game_handler(
     callback: CallbackQuery,
 ) -> None:
+    """Start the game and privately send roles."""
+
     if callback.message is None:
         await callback.answer()
         return
@@ -293,14 +298,100 @@ async def start_game_handler(
         )
     else:
         await message.answer(
-            game_started_message()
+            "⚔️ <b>O‘yin boshlandi!</b>\n\n"
+            "📜 Barcha rollar o‘yinchilarga shaxsiy xabarda yuborildi."
         )
+
+
+@router.callback_query(F.data.startswith("throne:vote:"))
+async def vote_handler(
+    callback: CallbackQuery,
+) -> None:
+    """Register a player's daytime vote."""
+
+    if callback.message is None:
+        await callback.answer()
+        return
+
+    user = callback.from_user
+    chat_id = callback.message.chat.id
+
+    if callback.data is None:
+        await callback.answer(
+            "⚠️ Ovoz berish ma'lumotlari topilmadi.",
+            show_alert=True,
+        )
+        return
+
+    try:
+        target_id = int(
+            callback.data.rsplit(":", 1)[1]
+        )
+    except (ValueError, IndexError):
+        await callback.answer(
+            "⚠️ Ovoz berish ma'lumotlari noto‘g‘ri.",
+            show_alert=True,
+        )
+        return
+
+    game = game_service.get_game(chat_id)
+
+    if game is None:
+        await callback.answer(
+            "O‘yin topilmadi.",
+            show_alert=True,
+        )
+        return
+
+    voter = game.get_player(user.id)
+
+    if voter is None:
+        await callback.answer(
+            "Siz bu o‘yinda qatnashmayapsiz.",
+            show_alert=True,
+        )
+        return
+
+    target = game.get_player(target_id)
+
+    if target is None:
+        await callback.answer(
+            target_not_found_message(),
+            show_alert=True,
+        )
+        return
+
+    if not target.alive:
+        await callback.answer(
+            target_not_alive_message(),
+            show_alert=True,
+        )
+        return
+
+    success = vote_system.submit_vote(
+        game=game,
+        voter_id=user.id,
+        target_id=target_id,
+    )
+
+    if not success:
+        await callback.answer(
+            "⚠️ Hozir bu o‘yinchiga ovoz berib bo‘lmaydi.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer(
+        f"⚖️ {target.display_name} uchun ovozingiz qabul qilindi."
+    )
 
 
 @router.callback_query(F.data == "throne:stop")
 async def stop_game_handler(
     callback: CallbackQuery,
 ) -> None:
+    """Stop the current game."""
+
     if callback.message is None:
         await callback.answer()
         return
@@ -335,4 +426,4 @@ async def stop_game_handler(
 
     await message.edit_text(
         game_stopped_message()
-    )
+        )
