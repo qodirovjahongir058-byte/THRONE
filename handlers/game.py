@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 
 from aiogram import F, Router
@@ -41,7 +42,7 @@ from role_notifications import send_roles_to_all_players
 from vote_system import vote_system
 
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("throne.handlers.game")
 
 router = Router(name="throne_game")
 
@@ -51,8 +52,19 @@ router = Router(name="throne_game")
 # ============================================================
 
 def _is_group(message: Message) -> bool:
-    """Xabar guruhdan kelganini tekshirish."""
+    """Xabar guruh yoki superguruhdan kelganini tekshirish."""
+
     return message.chat.type in {"group", "supergroup"}
+
+
+def _display_name(player: PlayerState) -> str:
+    """O'yinchining xavfsiz ko'rsatiladigan ismini qaytarish."""
+
+    name = player.display_name or player.username or (
+        f"User {player.user_id}"
+    )
+
+    return html.escape(name)
 
 
 async def _is_chat_admin(
@@ -60,6 +72,7 @@ async def _is_chat_admin(
     user_id: int,
 ) -> bool:
     """Foydalanuvchi guruh administratori ekanini tekshirish."""
+
     try:
         member = await message.bot.get_chat_member(
             chat_id=message.chat.id,
@@ -70,15 +83,10 @@ async def _is_chat_admin(
 
     except TelegramAPIError:
         logger.exception(
-            "Guruh administratori tekshiruvida xato: chat_id=%s",
+            "Administratorni tekshirishda xatolik: chat_id=%s",
             message.chat.id,
         )
         return False
-
-
-def _display_name(player: PlayerState) -> str:
-    """O'yinchining ko'rsatiladigan ismi."""
-    return player.display_name or f"User {player.user_id}"
 
 
 def _find_player_game(
@@ -86,11 +94,12 @@ def _find_player_game(
     required_phase: GamePhase,
 ) -> GameState | None:
     """
-    Foydalanuvchi qatnashayotgan kerakli bosqichdagi o'yinni topish.
+    Foydalanuvchi qatnashayotgan o'yinni topish.
 
-    Agar foydalanuvchi bir nechta mos o'yinda qatnashsa,
-    noto'g'ri o'yinga harakat yubormaslik uchun None qaytariladi.
+    Bir nechta mos o'yin topilsa, noto'g'ri o'yinga
+    harakat yubormaslik uchun None qaytariladi.
     """
+
     matches = [
         game
         for game in game_service._games.values()
@@ -107,13 +116,15 @@ def _find_player_game(
                 user_id,
                 required_phase.value,
             )
+
         return None
 
     return matches[0]
 
 
 def _action_label(action_type: ActionType) -> str:
-    """Tungi harakat uchun tugma matni."""
+    """Tungi harakat tugmasi uchun matn."""
+
     labels = {
         ActionType.OBSERVE: "👁 Kuzatish",
         ActionType.PROTECT: "🛡 Himoya",
@@ -131,9 +142,13 @@ def _get_alive_targets(
     game: GameState,
     actor_id: int,
 ) -> list[tuple[int, str]]:
-    """Tirik va o'zidan boshqa o'yinchilar ro'yxati."""
+    """O'zidan boshqa tirik o'yinchilar ro'yxatini qaytarish."""
+
     return [
-        (player.user_id, _display_name(player))
+        (
+            player.user_id,
+            _display_name(player),
+        )
         for player in game.alive_players()
         if player.user_id != actor_id
     ]
@@ -148,12 +163,10 @@ async def _send_night_actions(
     game: GameState,
 ) -> None:
     """
-    Har bir tirik o'yinchiga uning roliga mos tungi
-    harakat tugmalarini yuborish.
-
-    Bir o'yinchiga xabar yuborilmasa, qolgan o'yinchilar
-    uchun yuborish davom etadi.
+    Tirik o'yinchilarga ularning rollariga mos
+    tungi harakat tugmalarini shaxsiy xabarda yuborish.
     """
+
     for player in game.alive_players():
         runtime_info = build_role_runtime_info(player)
 
@@ -167,14 +180,16 @@ async def _send_night_actions(
         buttons: list[tuple[str, str]] = []
 
         for rule in runtime_info.action_rules:
+            callback_data = (
+                "throne:night:"
+                f"{rule.action_type.value}:"
+                f"{1 if rule.requires_target else 0}"
+            )
+
             buttons.append(
                 (
                     _action_label(rule.action_type),
-                    (
-                        "throne:night:"
-                        f"{rule.action_type.value}:"
-                        f"{1 if rule.requires_target else 0}"
-                    ),
+                    callback_data,
                 )
             )
 
@@ -184,13 +199,16 @@ async def _send_night_actions(
                 "O'z rolingiz uchun mavjud tungi "
                 "harakatni tanlang."
             )
+
             markup = night_action_keyboard(buttons)
+
         else:
             text = (
                 "🌙 <b>Tun boshlandi.</b>\n\n"
                 "Sizning rolingizda bu tun uchun "
                 "faol tungi qobiliyat mavjud emas."
             )
+
             markup = None
 
         try:
@@ -216,11 +234,11 @@ async def _send_night_actions(
 async def new_game_handler(
     message: Message,
 ) -> None:
-    """Guruhda yangi THRONE o'yinini ochish."""
+    """Guruhda yangi o'yin ochish."""
 
     if not _is_group(message):
         await message.answer(
-            "⚠️ <b>THRONE</b> o'yini faqat guruhlarda boshlanadi."
+            "⚠️ THRONE o'yini faqat guruhda boshlanadi."
         )
         return
 
@@ -231,7 +249,9 @@ async def new_game_handler(
         message,
         message.from_user.id,
     ):
-        await message.answer(permission_denied_message())
+        await message.answer(
+            permission_denied_message()
+        )
         return
 
     result = game_service.create_game(
@@ -262,14 +282,23 @@ async def new_game_handler(
 async def join_game_handler(
     callback: CallbackQuery,
 ) -> None:
-    """O'yinchini kutish xonasiga qo'shish."""
+    """Foydalanuvchini kutish xonasiga qo'shish."""
 
     if callback.message is None:
         await callback.answer()
         return
 
+    message = callback.message
+
+    if message.chat.type not in {"group", "supergroup"}:
+        await callback.answer(
+            "O'yinga faqat guruh orqali qo'shilish mumkin.",
+            show_alert=True,
+        )
+        return
+
     user = callback.from_user
-    chat_id = callback.message.chat.id
+    chat_id = message.chat.id
 
     game = game_service.get_game(chat_id)
 
@@ -280,7 +309,10 @@ async def join_game_handler(
         )
         return
 
-    if game.phase != GamePhase.LOBBY:
+    if (
+        game.phase != GamePhase.LOBBY
+        or game.status != GameStatus.WAITING
+    ):
         await callback.answer(
             "O'yin boshlangan yoki kutish xonasi yopilgan.",
             show_alert=True,
@@ -308,8 +340,10 @@ async def join_game_handler(
     if not result.success or result.game is None:
         if result.message == "player_already_joined":
             answer = player_already_joined_message()
+
         elif result.message == "game_full":
             answer = game_full_message()
+
         else:
             answer = "⚠️ O'yinga qo'shilib bo'lmadi."
 
@@ -319,10 +353,12 @@ async def join_game_handler(
         )
         return
 
-    await callback.answer("Siz o'yinga qo'shildingiz!")
+    await callback.answer(
+        "Siz o'yinga qo'shildingiz!"
+    )
 
     try:
-        await callback.message.edit_text(
+        await message.edit_text(
             lobby_message(
                 player_count=result.game.player_count(),
                 min_players=MIN_PLAYERS,
@@ -330,19 +366,27 @@ async def join_game_handler(
             ),
             reply_markup=lobby_keyboard(),
         )
+
     except TelegramAPIError:
         logger.warning(
             "Kutish xonasi xabarini yangilab bo'lmadi.",
             exc_info=True,
         )
 
-    await callback.message.answer(
-        player_joined_message(
-            display_name=_display_name(player),
-            player_count=result.game.player_count(),
-            max_players=MAX_PLAYERS,
+    try:
+        await message.answer(
+            player_joined_message(
+                display_name=_display_name(player),
+                player_count=result.game.player_count(),
+                max_players=MAX_PLAYERS,
+            )
         )
-    )
+
+    except TelegramAPIError:
+        logger.warning(
+            "O'yinchining qo'shilgani haqida xabar yuborilmadi.",
+            exc_info=True,
+        )
 
 
 # ============================================================
@@ -353,7 +397,7 @@ async def join_game_handler(
 async def players_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Kutish xonasidagi o'yinchilarni ko'rsatish."""
+    """Kutish xonasidagi o'yinchilar ro'yxatini ko'rsatish."""
 
     if callback.message is None:
         await callback.answer()
@@ -406,23 +450,27 @@ async def start_game_handler(
         return
 
     message = callback.message
-    user = callback.from_user
 
-    if not _is_group(message):
+    if message.chat.type not in {"group", "supergroup"}:
         await callback.answer(
             "O'yinni faqat guruhda boshlash mumkin.",
             show_alert=True,
         )
         return
 
-    if not await _is_chat_admin(message, user.id):
+    if not await _is_chat_admin(
+        message,
+        callback.from_user.id,
+    ):
         await callback.answer(
             "Faqat guruh administratori o'yinni boshlashi mumkin.",
             show_alert=True,
         )
         return
 
-    game = game_service.get_game(message.chat.id)
+    game = game_service.get_game(
+        message.chat.id
+    )
 
     if game is None:
         await callback.answer(
@@ -431,14 +479,21 @@ async def start_game_handler(
         )
         return
 
-    if game.phase != GamePhase.LOBBY:
+    if (
+        game.phase != GamePhase.LOBBY
+        or game.status != GameStatus.WAITING
+    ):
         await callback.answer(
             "O'yin allaqachon boshlangan.",
             show_alert=True,
         )
         return
 
-    if not MIN_PLAYERS <= game.player_count() <= MAX_PLAYERS:
+    if not (
+        MIN_PLAYERS
+        <= game.player_count()
+        <= MAX_PLAYERS
+    ):
         await callback.answer(
             not_enough_players_message(
                 current_count=game.player_count(),
@@ -461,13 +516,16 @@ async def start_game_handler(
 
     game = result.game
 
-    await callback.answer("O'yin boshlandi!")
+    await callback.answer(
+        "O'yin boshlandi!"
+    )
 
     try:
         delivery_results = await send_roles_to_all_players(
             bot=message.bot,
             game=game,
         )
+
     except Exception:
         logger.exception(
             "Rollarni yuborishda xatolik: game_id=%s",
@@ -482,19 +540,26 @@ async def start_game_handler(
     )
 
     try:
-        await message.edit_text(role_reveal_message())
+        await message.edit_text(
+            role_reveal_message()
+        )
+
     except TelegramAPIError:
         logger.warning(
             "Kutish xonasi xabarini yangilab bo'lmadi.",
             exc_info=True,
         )
 
-    if failed_count > 0 or len(delivery_results) < game.player_count():
+    if (
+        failed_count > 0
+        or len(delivery_results) < game.player_count()
+    ):
         await message.answer(
             "📜 <b>Rollar taqsimlandi.</b>\n\n"
             "⚠️ Ayrim o'yinchilarga shaxsiy xabar yetib bormadi. "
             "Ular botga kirib, <b>/start</b> yuborishi kerak."
         )
+
     else:
         await message.answer(
             "⚔️ <b>O'yin boshlandi!</b>\n\n"
@@ -506,6 +571,7 @@ async def start_game_handler(
             bot=message.bot,
             game=game,
         )
+
     except Exception:
         logger.exception(
             "Birinchi tunni boshlashda xatolik: game_id=%s",
@@ -534,7 +600,7 @@ async def start_game_handler(
 async def night_action_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Tungi harakatni tanlash va nishon so'rash."""
+    """Tungi harakatni tanlash va kerak bo'lsa nishon so'rash."""
 
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -560,6 +626,7 @@ async def night_action_handler(
 
     try:
         action_type = ActionType(action_value)
+
     except ValueError:
         await callback.answer(
             "⚠️ Noma'lum tungi harakat.",
@@ -569,8 +636,10 @@ async def night_action_handler(
 
     requires_target = requires_target_value == "1"
 
+    user_id = callback.from_user.id
+
     game = _find_player_game(
-        user_id=callback.from_user.id,
+        user_id=user_id,
         required_phase=GamePhase.NIGHT,
     )
 
@@ -581,7 +650,6 @@ async def night_action_handler(
         )
         return
 
-    user_id = callback.from_user.id
     player = game.get_player(user_id)
 
     if player is None or not player.alive:
@@ -619,6 +687,13 @@ async def night_action_handler(
     if rule.requires_target != requires_target:
         await callback.answer(
             "⚠️ Harakat turi mos kelmadi.",
+            show_alert=True,
+        )
+        return
+
+    if player.has_acted:
+        await callback.answer(
+            "Siz tungi harakatingizni allaqachon tanlagansiz.",
             show_alert=True,
         )
         return
@@ -676,6 +751,7 @@ async def night_action_handler(
             f"⚔️ Harakat: <b>{_action_label(action_type)}</b>\n\n"
             "Natija tun yakunida aniqlanadi."
         )
+
     except TelegramAPIError:
         logger.warning(
             "Tungi harakat xabarini yangilab bo'lmadi.",
@@ -691,7 +767,7 @@ async def night_action_handler(
 async def night_target_handler(
     callback: CallbackQuery,
 ) -> None:
-    """Tanlangan tungi harakatni nishonga qo'llash."""
+    """Tanlangan tungi harakatni tanlangan nishonga qo'llash."""
 
     if callback.message is None or callback.data is None:
         await callback.answer()
@@ -711,6 +787,7 @@ async def night_target_handler(
     try:
         action_type = ActionType(action_value)
         target_id = int(target_value)
+
     except ValueError:
         await callback.answer(
             "⚠️ Nishon ma'lumotlari noto'g'ri.",
@@ -737,47 +814,4 @@ async def night_target_handler(
 
     if actor is None or not actor.alive:
         await callback.answer(
-            "Siz bu vaqtda harakat qila olmaysiz.",
-            show_alert=True,
-        )
-        return
-
-    if target is None:
-        await callback.answer(
-            target_not_found_message(),
-            show_alert=True,
-        )
-        return
-
-    if not target.alive:
-        await callback.answer(
-            target_not_alive_message(),
-            show_alert=True,
-        )
-        return
-
-    if target_id == user_id:
-        await callback.answer(
-            "O'zingizni nishon sifatida tanlay olmaysiz.",
-            show_alert=True,
-        )
-        return
-
-    runtime_info = build_role_runtime_info(actor)
-
-    if runtime_info is None:
-        await callback.answer(
-            "⚠️ Roli aniqlanmadi.",
-            show_alert=True,
-        )
-        return
-
-    rule = next(
-        (
-            item
-            for item in runtime_info.action_rules
-            if item.action_type == action_type
-            and item.requires_target
-        ),
-        None,
-    
+            "Siz bu vaqtd
