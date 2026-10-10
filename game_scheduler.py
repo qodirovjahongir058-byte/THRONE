@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
+
+logger = logging.getLogger(__name__)
 
 PhaseCallback = Callable[[], Awaitable[None]]
 
@@ -45,7 +48,8 @@ class GameScheduler:
                 phase_name=phase_name,
                 duration=duration,
                 callback=callback,
-            )
+            ),
+            name=f"throne:{game_id}:{phase_name}",
         )
 
         self._tasks[game_id] = ScheduledPhase(
@@ -61,55 +65,66 @@ class GameScheduler:
         duration: int,
         callback: PhaseCallback,
     ) -> None:
+        current_task = asyncio.current_task()
+
         try:
             await asyncio.sleep(duration)
             await callback()
 
         except asyncio.CancelledError:
-            return
+            raise
+
+        except Exception:
+            logger.exception(
+                "Game phase timer failed: game_id=%s, phase=%s",
+                game_id,
+                phase_name,
+            )
 
         finally:
             scheduled = self._tasks.get(game_id)
 
+            # An old timer must not remove a newer timer.
             if (
                 scheduled is not None
-                and scheduled.phase_name == phase_name
+                and scheduled.task is current_task
             ):
                 self._tasks.pop(game_id, None)
 
     def cancel(self, game_id: int) -> bool:
-        """Cancel the currently scheduled timer for a game."""
+        """Cancel a game's timer without cancelling itself."""
 
         scheduled = self._tasks.pop(game_id, None)
 
         if scheduled is None:
             return False
 
-        scheduled.task.cancel()
+        current_task = asyncio.current_task()
+
+        if (
+            scheduled.task is not current_task
+            and not scheduled.task.done()
+        ):
+            scheduled.task.cancel()
+
         return True
 
     def is_scheduled(self, game_id: int) -> bool:
-        """Return whether a timer is currently scheduled."""
+        """Return whether a game has an active timer."""
 
         scheduled = self._tasks.get(game_id)
 
-        if scheduled is None:
-            return False
+        return (
+            scheduled is not None
+            and not scheduled.task.done()
+        )
 
-        return not scheduled.task.done()
-
-    def get_phase_name(
-        self,
-        game_id: int,
-    ) -> str | None:
+    def get_phase_name(self, game_id: int) -> str | None:
         """Return the currently scheduled phase name."""
 
         scheduled = self._tasks.get(game_id)
 
-        if scheduled is None:
-            return None
-
-        if scheduled.task.done():
+        if scheduled is None or scheduled.task.done():
             return None
 
         return scheduled.phase_name
@@ -117,9 +132,7 @@ class GameScheduler:
     def cancel_all(self) -> None:
         """Cancel all active game timers."""
 
-        game_ids = list(self._tasks.keys())
-
-        for game_id in game_ids:
+        for game_id in list(self._tasks):
             self.cancel(game_id)
 
 
