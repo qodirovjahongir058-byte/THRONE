@@ -46,11 +46,15 @@ class FlowResult:
 
 
 class GameFlow:
-    """THRONE o'yinining bosqichlarini boshqaradi."""
+    """THRONE o'yinining barcha asosiy bosqichlarini boshqaradi."""
 
     def __init__(self) -> None:
         self._games: dict[int, GameState] = {}
         self._private_senders: dict[int, SendPrivateMessage] = {}
+
+    # ---------------------------------------------------------
+    # O'YINNI RO'YXATGA OLISH
+    # ---------------------------------------------------------
 
     def register_game(self, game: GameState) -> None:
         """O'yinni boshqaruv ro'yxatiga qo'shadi."""
@@ -58,13 +62,17 @@ class GameFlow:
         game.metadata.setdefault("night_actions", [])
 
     def unregister_game(self, game_id: int) -> None:
-        """O'yin taymerini bekor qiladi va ro'yxatdan chiqaradi."""
+        """O'yinni ro'yxatdan chiqaradi va taymerlarini bekor qiladi."""
         game_scheduler.cancel(game_id)
         self._games.pop(game_id, None)
         self._private_senders.pop(game_id, None)
 
     def get_game(self, game_id: int) -> GameState | None:
         return self._games.get(game_id)
+
+    # ---------------------------------------------------------
+    # TUNGI HARAKATLAR
+    # ---------------------------------------------------------
 
     def submit_night_action(
         self,
@@ -104,6 +112,7 @@ class GameFlow:
 
         actions = game.metadata.setdefault("night_actions", [])
 
+        # Bitta o'yinchining eski harakati takror saqlanmasin.
         actions[:] = [
             existing
             for existing in actions
@@ -128,12 +137,16 @@ class GameFlow:
         game.metadata["night_actions"] = []
 
     def _reset_player_night_flags(self, game: GameState) -> None:
-        """Tungi harakat belgilarini tozalaydi."""
+        """Yangi tun uchun eski harakat belgilarini tozalaydi."""
 
         for player in game.players.values():
             player.has_acted = False
             player.metadata.pop("night_action", None)
             player.metadata.pop("night_target", None)
+
+    # ---------------------------------------------------------
+    # BIRINCHI TUN
+    # ---------------------------------------------------------
 
     async def start_first_night(
         self,
@@ -141,7 +154,7 @@ class GameFlow:
         send_message: SendMessage,
         send_private_message: SendPrivateMessage | None = None,
     ) -> FlowResult:
-        """Birinchi tunni boshlaydi."""
+        """Rollar tarqatilgandan keyin birinchi tunni boshlaydi."""
 
         if send_private_message is not None:
             self._private_senders[game.game_id] = send_private_message
@@ -175,12 +188,16 @@ class GameFlow:
             callback=lambda: self._finish_night(game, send_message),
         )
 
+    # ---------------------------------------------------------
+    # TUNNI YAKUNLASH
+    # ---------------------------------------------------------
+
     async def _finish_night(
         self,
         game: GameState,
         send_message: SendMessage,
     ) -> None:
-        """Tungi harakatlarni hisoblab, kunduzga o'tadi."""
+        """Tungi harakatlarni hisoblab, kunduzni boshlaydi."""
 
         if (
             game.status != GameStatus.ACTIVE
@@ -195,7 +212,7 @@ class GameFlow:
             )
         except Exception:
             logger.exception(
-                "Tungi harakatlar hisoblanmadi: game_id=%s",
+                "Tungi harakatlarni hisoblashda xatolik: game_id=%s",
                 game.game_id,
             )
 
@@ -211,7 +228,7 @@ class GameFlow:
 
             if not day_result.success:
                 logger.error(
-                    "Kunduzni boshlash imkonsiz: game_id=%s",
+                    "Kunduzni boshlash amalga oshmadi: game_id=%s",
                     game.game_id,
                 )
                 return
@@ -237,7 +254,8 @@ class GameFlow:
 
         if not day_result.success:
             logger.error(
-                "Kunduzni boshlashda xatolik: game_id=%s, reason=%s",
+                "Kunduzni boshlash amalga oshmadi: "
+                "game_id=%s, reason=%s",
                 game.game_id,
                 day_result.message,
             )
@@ -247,6 +265,7 @@ class GameFlow:
             day_started_message(game.night_number)
         )
 
+        # Tunda chiqarilgan o'yinchilarni e'lon qilish.
         if eliminated:
             names: list[str] = []
 
@@ -266,6 +285,8 @@ class GameFlow:
                     + "\n".join(f"• {name}" for name in names)
                 )
 
+            # Har bir chiqarilgan o'yinchiga navbat bilan
+            # so'nggi so'z beriladi.
             game.metadata["last_words_queue"] = eliminated[1:]
             game.metadata["last_words_next_phase"] = (
                 GamePhase.DISCUSSION.value
@@ -279,18 +300,23 @@ class GameFlow:
             )
             return
 
+        # Hech kim chiqarilmagan bo'lsa ham g'alabani tekshiramiz.
         victory = check_victory(game)
 
         if victory.finished:
             await self._finish_game(
-                game,
-                victory.winning_side.value,
-                victory.reason,
-                send_message,
+                game=game,
+                winning_side=victory.winning_side.value,
+                reason=victory.reason,
+                send_message=send_message,
             )
             return
 
         await self.start_discussion(game, send_message)
+
+    # ---------------------------------------------------------
+    # SO'NGGI SO'Z
+    # ---------------------------------------------------------
 
     async def _start_last_words(
         self,
@@ -312,7 +338,8 @@ class GameFlow:
 
         if not result.success:
             logger.warning(
-                "So'nggi so'z boshlanmadi: game_id=%s, player_id=%s, reason=%s",
+                "So'nggi so'z boshlanmadi: "
+                "game_id=%s, player_id=%s, reason=%s",
                 game.game_id,
                 player_id,
                 result.message,
@@ -329,6 +356,7 @@ class GameFlow:
 
         if player is None:
             last_words_system.finish(game)
+
             await self._continue_after_last_words(
                 game,
                 send_message,
@@ -338,12 +366,12 @@ class GameFlow:
 
         game.metadata["last_words_next_phase"] = next_phase.value
 
-        private_sender = self._private_senders.get(game.game_id)
         player_name = html.escape(
             player.display_name or str(player.user_id)
         )
 
-        # Maxfiy xabarni faqat o'yinchining shaxsiy chatiga yuborish.
+        private_sender = self._private_senders.get(game.game_id)
+
         if private_sender is not None:
             try:
                 await private_sender(
@@ -360,8 +388,7 @@ class GameFlow:
                 )
 
                 await send_message(
-                    "⚠️ <b>So'nggi so'z uchun shaxsiy xabar yuborilmadi.</b>\n"
-                    "O'yinchi botga shaxsiy xabar yuborib, qayta urinishi kerak."
+                    "⚠️ <b>So'nggi so'z haqida shaxsiy xabar yuborilmadi.</b>"
                 )
         else:
             logger.warning(
@@ -370,8 +397,8 @@ class GameFlow:
             )
 
             await send_message(
-                "⚠️ <b>So'nggi so'z uchun shaxsiy xabar yuboruvchi sozlanmagan.</b>\n"
-                "Keyingi tuzatishda botning shaxsiy xabar yuborish funksiyasini ulash kerak."
+                "⚠️ <b>So'nggi so'z uchun shaxsiy xabar yuboruvchi "
+                "sozlanmagan.</b>"
             )
 
         await send_message(
@@ -394,7 +421,7 @@ class GameFlow:
         game: GameState,
         send_message: SendMessage,
     ) -> None:
-        """So'nggi so'z vaqtini tugatadi va o'yinni davom ettiradi."""
+        """So'nggi so'z muddatini yakunlaydi."""
 
         if (
             game.status != GameStatus.ACTIVE
@@ -417,6 +444,7 @@ class GameFlow:
 
                 if saved_text:
                     safe_text = html.escape(str(saved_text))
+
                     await send_message(
                         "🕯️ <b>So'nggi so'z</b>\n\n"
                         f"👤 <b>{player_name}</b>:\n"
@@ -476,7 +504,7 @@ class GameFlow:
         send_message: SendMessage,
         next_phase: GamePhase,
     ) -> None:
-        """So'nggi so'zdan keyin o'yinni davom ettiradi."""
+        """So'nggi so'zdan keyin keyingi bosqichni boshlaydi."""
 
         if game.status != GameStatus.ACTIVE:
             return
@@ -485,10 +513,10 @@ class GameFlow:
 
         if victory.finished:
             await self._finish_game(
-                game,
-                victory.winning_side.value,
-                victory.reason,
-                send_message,
+                game=game,
+                winning_side=victory.winning_side.value,
+                reason=victory.reason,
+                send_message=send_message,
             )
             return
 
@@ -497,12 +525,16 @@ class GameFlow:
         else:
             await self.start_discussion(game, send_message)
 
+    # ---------------------------------------------------------
+    # MUHOKAMA
+    # ---------------------------------------------------------
+
     async def start_discussion(
         self,
         game: GameState,
         send_message: SendMessage,
     ) -> FlowResult:
-        """Muhokama bosqichini boshlaydi."""
+        """Kunduzgi muhokamani boshlaydi."""
 
         if game.status != GameStatus.ACTIVE:
             return FlowResult(False, "game_not_active")
@@ -512,7 +544,9 @@ class GameFlow:
         if not result.success:
             return FlowResult(False, result.message)
 
-        await send_message(discussion_started_message())
+        await send_message(
+            discussion_started_message()
+        )
 
         game_scheduler.schedule(
             game_id=game.game_id,
@@ -539,12 +573,16 @@ class GameFlow:
 
         await self.start_voting(game, send_message)
 
+    # ---------------------------------------------------------
+    # OVOZ BERISH
+    # ---------------------------------------------------------
+
     async def start_voting(
         self,
         game: GameState,
         send_message: SendMessage,
     ) -> FlowResult:
-        """Ovoz berishni boshlaydi."""
+        """Ovoz berish bosqichini boshlaydi."""
 
         if game.status != GameStatus.ACTIVE:
             return FlowResult(False, "game_not_active")
@@ -586,7 +624,7 @@ class GameFlow:
         game: GameState,
         send_message: SendMessage,
     ) -> None:
-        """Birinchi ovoz berishni yakunlaydi."""
+        """Birinchi ovoz berish natijasini hisoblaydi."""
 
         if (
             game.status != GameStatus.ACTIVE
@@ -638,176 +676,4 @@ class GameFlow:
                 reply_markup=voting_keyboard(targets),
             )
 
-            game_scheduler.schedule(
-                game_id=game.game_id,
-                phase_name="REVOTE",
-                duration=DEFAULT_VOTING_DURATION,
-                callback=lambda: self._finish_revote(
-                    game,
-                    send_message,
-                ),
-            )
-            return
-
-        await self._process_vote_result(
-            game,
-            resolution,
-            send_message,
-        )
-
-    async def _finish_revote(
-        self,
-        game: GameState,
-        send_message: SendMessage,
-    ) -> None:
-        """Qayta ovoz berish natijasini hisoblaydi."""
-
-        if (
-            game.status != GameStatus.ACTIVE
-            or game.phase != GamePhase.VOTING
-        ):
-            return
-
-        resolution = vote_system.resolve_revote(game)
-
-        await self._process_vote_result(
-            game,
-            resolution,
-            send_message,
-        )
-
-    async def _process_vote_result(
-        self,
-        game: GameState,
-        resolution: VoteResolution,
-        send_message: SendMessage,
-    ) -> None:
-        """Ovoz natijasini qayta ishlaydi."""
-
-        if resolution.result == VoteResult.NO_ELIMINATION:
-            await send_message(
-                "⚖️ <b>Ovoz berish yakunlandi.</b>\n\n"
-                "Hech kim o'yindan chiqarilma
-async def _process_vote_result(
-        self,
-        game: GameState,
-        resolution: VoteResolution,
-        send_message: SendMessage,
-    ) -> None:
-        """Ovoz natijasini qayta ishlaydi."""
-
-        if game.status != GameStatus.ACTIVE:
-            return
-
-        if resolution.result == VoteResult.NO_ELIMINATION:
-            await send_message(
-                "⚖️ <b>Ovoz berish yakunlandi.</b>\n\n"
-                "Hech kim o‘yindan chiqarilmadi."
-            )
-            await self._start_next_night(game, send_message)
-            return
-
-        if (
-            resolution.result != VoteResult.ELIMINATED
-            or resolution.eliminated_player_id is None
-        ):
-            await self._start_next_night(game, send_message)
-            return
-
-        player_id = resolution.eliminated_player_id
-        player = game.get_player(player_id)
-
-        if player is not None:
-            player_name = html.escape(
-                player.display_name or str(player.user_id)
-            )
-            await send_message(
-                f"⚔️ <b>{player_name}</b> ovoz berish orqali "
-                "o‘yindan chiqarildi."
-            )
-
-        victory = check_victory(game)
-
-        if victory.finished:
-            await self._finish_game(
-                game=game,
-                winning_side=victory.winning_side.value,
-                reason=victory.reason,
-                send_message=send_message,
-            )
-            return
-
-        await self._start_last_words(
-            game=game,
-            player_id=player_id,
-            send_message=send_message,
-            next_phase=GamePhase.NIGHT,
-        )
-
-    async def _start_next_night(
-        self,
-        game: GameState,
-        send_message: SendMessage,
-    ) -> FlowResult:
-        """Keyingi tunni boshlaydi."""
-
-        if game.status != GameStatus.ACTIVE:
-            return FlowResult(False, "game_not_active")
-
-        result = phase_manager.start_next_night(game)
-
-        if not result.success:
-            logger.error(
-                "Keyingi tunni boshlash amalga oshmadi: "
-                "game_id=%s, reason=%s",
-                game.game_id,
-                result.message,
-            )
-            return FlowResult(False, result.message)
-
-        self.clear_night_actions(game)
-        self._reset_player_night_flags(game)
-
-        await send_message(
-            night_started_message(game.night_number)
-        )
-
-        self._schedule_night(game, send_message)
-
-        return FlowResult(True, "next_night_started")
-
-    async def _finish_game(
-        self,
-        game: GameState,
-        winning_side: str,
-        reason: str,
-        send_message: SendMessage,
-    ) -> None:
-        """O‘yinni yakunlaydi va uning taymerini to‘xtatadi."""
-
-        if game.status in {
-            GameStatus.FINISHED,
-            GameStatus.STOPPED,
-        }:
-            return
-
-        phase_manager.finish(game)
-        game_scheduler.cancel(game.game_id)
-
-        try:
-            await send_message(
-                game_finished_message(
-                    winning_side=winning_side,
-                    reason=reason,
-                )
-            )
-        except Exception:
-            logger.exception(
-                "O‘yin yakuni haqidagi xabar yuborilmadi: game_id=%s",
-                game.game_id,
-            )
-        finally:
-            self.unregister_game(game.game_id)
-
-
-game_flow = GameFlow()
+         
