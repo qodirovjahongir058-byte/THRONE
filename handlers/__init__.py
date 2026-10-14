@@ -1,7 +1,9 @@
-from .start import router as start_router
-from .game import router as game_router
+"""
+THRONE o'yin tizimi.
 
-__all__ = [
-    "start_router",
-    "game_router",
-]
+Bu paket o'yin holati, rollar, harakatlar,
+natijalarni hisoblash va o'yin jarayonini boshqarish
+modullarini o'z ichiga oladi.
+"""
+
+__version__ = "1.0.0"
