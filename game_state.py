@@ -2,7 +2,7 @@ from future import annotations
 
 from enum import Enum
 
-O‘yin sozlamalari
+Game settings
 
 MIN_PLAYERS = 7
 MAX_PLAYERS = 36
@@ -12,7 +12,7 @@ DEFAULT_DISCUSSION_DURATION = 120
 DEFAULT_VOTING_DURATION = 60
 DEFAULT_NIGHT_DURATION = 90
 
-O‘yin bosqichlari
+Game phases
 
 class GamePhase(str, Enum):
 LOBBY = "LOBBY"
@@ -26,7 +26,7 @@ LAST_WORDS = "LAST_WORDS"
 FINISHED = "FINISHED"
 STOPPED = "STOPPED"
 
-O‘yin holatlari
+Game status
 
 class GameStatus(str, Enum):
 WAITING = "WAITING"
@@ -34,7 +34,7 @@ ACTIVE = "ACTIVE"
 FINISHED = "FINISHED"
 STOPPED = "STOPPED"
 
-Ovoz berish natijalari
+Voting results
 
 class VoteResult(str, Enum):
 ELIMINATED = "ELIMINATED"
