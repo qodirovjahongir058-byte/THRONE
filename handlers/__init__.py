@@ -1,9 +1,9 @@
 """
 THRONE o'yin tizimi.
-
-Bu paket o'yin holati, rollar, harakatlar,
-natijalarni hisoblash va o'yin jarayonini boshqarish
-modullarini o'z ichiga oladi.
 """
 
-__version__ = "1.0.0"
+from .game import router as game_router
+from .start import router as start_router
+
+__all__ = ("game_router", "start_router")
+__version__ = "1.0.1"
