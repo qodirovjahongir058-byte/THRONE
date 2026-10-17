@@ -16,7 +16,7 @@ class GameStatus(str, Enum): WAITING = "WAITING" ACTIVE = "ACTIVE" FINISHED = "F
 =========================================================
 OVOZ BERISH NATIJALARI
 =========================================================
-    class VoteResult(str, Enum): ELIMINATED = "ELIMINATED" NO_ELIMINATION = "NO_ELIMINATION" REVOTE = "REVOTE"
+class VoteResult(str, Enum): ELIMINATED = "ELIMINATED" NO_ELIMINATION = "NO_ELIMINATION" REVOTE = "REVOTE"
 =========================================================
 O'YINCHI HOLATI
 =========================================================
@@ -141,7 +141,19 @@ def alive_count(self) -> int:
         for player in self.players.values()
         if player.alive
     )
-    # -----------------------------------------------------
+
+def player_count(self) -> int:
+    """Jami o'yinchilar sonini qaytaradi."""
+    return len(self.players)
+
+def can_start(self) -> bool:
+    """O'yinni boshlash uchun o'yinchilar sonini tekshiradi."""
+    return (
+        self.phase == GamePhase.LOBBY
+        and MIN_PLAYERS <= len(self.players) <= MAX_PLAYERS
+    )
+
+# -----------------------------------------------------
 # TUNGI BOSQICH VA OVOZ BERISH
 # -----------------------------------------------------
 
@@ -207,15 +219,3 @@ def finish_game(self) -> None:
 def stop_game(self) -> None:
     """O'yinni to'xtatadi."""
     self.set_phase(GamePhase.STOPPED)
-
-def player_count(self) -> int:
-    """Jami o'yinchilar sonini qaytaradi."""
-    return len(self.players)
-
-def can_start(self) -> bool:
-    """O'yinni boshlash uchun o'yinchilar sonini tekshiradi."""
-    return (
-        self.phase == GamePhase.LOBBY
-        and MIN_PLAYERS <= len(self.players) <= MAX_PLAYERS
-)
-    
