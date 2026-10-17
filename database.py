@@ -445,6 +445,7 @@ async def update_game_record(
 async def check_database() -> bool:
     """Bazaga ulanish va oddiy so'rovni tekshiradi."""
     try:
+        
         async with get_db() as db:
             cursor = await db.execute("SELECT 1")
             row = await cursor.fetchone()
@@ -454,3 +455,6 @@ async def check_database() -> bool:
     except Exception:
         logger.exception("Ma'lumotlar bazasi tekshiruvi muvaffaqiyatsiz.")
         return False  
+async def init_database() -> None:
+    """Ma'lumotlar bazasini ishga tushiradi."""
+    await init_db()
