@@ -1,7 +1,8 @@
+
 from dataclasses import dataclass, field
 
 from game_engine import Game, GamePhase
-from roles import get_role, Team
+from roles import get_role
 
 
 @dataclass
@@ -15,19 +16,38 @@ class NightResolution:
 
 
 class GameResolver:
-    """THRONE o'yinidagi tungi harakatlar natijasini hisoblaydi."""
+    """THRONE tungi harakatlarining natijalarini hisoblaydi."""
 
     ATTACK_ACTIONS = {
         "attack",
         "team_attack",
         "hidden_attack",
+        "attack_bypass",
         "contract_attack",
     }
 
-    BLOCK_ACTIONS = {"block", "sabotage"}
-    PROTECT_ACTIONS = {"protect", "guard"}
+    BYPASS_PROTECTION_ACTIONS = {
+        "hidden_attack",
+        "attack_bypass",
+    }
+
+    BLOCK_ACTIONS = {
+        "block",
+        "sabotage",
+    }
+
+    PROTECT_ACTIONS = {
+        "protect",
+        "guard",
+    }
+
     HEAL_ACTIONS = {"heal"}
-    INVESTIGATE_ACTIONS = {"investigate", "memory_check"}
+
+    INVESTIGATE_ACTIONS = {
+        "investigate",
+        "memory_check",
+    }
+
     OBSERVE_ACTIONS = {"observe"}
 
     @classmethod
@@ -35,7 +55,10 @@ class GameResolver:
         if game.phase != GamePhase.NIGHT:
             return NightResolution(
                 success=False,
-                messages=["Tungi harakatlarni faqat tun bosqichida yechish mumkin."],
+                messages=[
+                    "Tungi harakatlarni faqat tun bosqichida "
+                    "yechish mumkin."
+                ],
             )
 
         result = NightResolution(success=True)
@@ -47,20 +70,21 @@ class GameResolver:
         attacked: dict[int, list[dict]] = {}
         investigation_results: dict[int, str] = {}
 
-        # 1. Bloklash.
+        # 1. Bloklash va sabotaj.
         for action in actions:
-            if action["action_type"] not in cls.BLOCK_ACTIONS:
+            if action.get("action_type") not in cls.BLOCK_ACTIONS:
                 continue
 
             target_id = action.get("target_id")
+            actor = game.players.get(action.get("actor_id"))
+            target = game.players.get(target_id)
+
             if target_id is None:
                 continue
 
-            actor = game.players.get(action["actor_id"])
-            target = game.players.get(target_id)
-
             if actor is None or not actor.alive:
                 continue
+
             if target is None or not target.alive:
                 continue
 
@@ -68,25 +92,27 @@ class GameResolver:
 
         result.blocked = sorted(blocked)
 
-        # Bloklangan o'yinchilarning oddiy harakatlari bekor qilinadi.
+        # Bloklangan o'yinchilarning harakatlari bajarilmaydi.
         active_actions = [
-            action for action in actions
-            if action["actor_id"] not in blocked
+            action
+            for action in actions
+            if action.get("actor_id") not in blocked
         ]
 
         # 2. Himoya va davolash.
         for action in active_actions:
-            action_type = action["action_type"]
+            action_type = action.get("action_type")
             target_id = action.get("target_id")
 
             if target_id is None:
                 continue
 
-            actor = game.players.get(action["actor_id"])
+            actor = game.players.get(action.get("actor_id"))
             target = game.players.get(target_id)
 
             if actor is None or not actor.alive:
                 continue
+
             if target is None or not target.alive:
                 continue
 
@@ -100,9 +126,9 @@ class GameResolver:
 
         # 3. Tekshiruv va kuzatuv.
         for action in active_actions:
-            action_type = action["action_type"]
+            action_type = action.get("action_type")
             target_id = action.get("target_id")
-            actor_id = action["actor_id"]
+            actor_id = action.get("actor_id")
 
             if target_id is None:
                 continue
@@ -112,11 +138,13 @@ class GameResolver:
 
             if actor is None or not actor.alive:
                 continue
+
             if target is None or not target.alive:
                 continue
 
             if action_type in cls.INVESTIGATE_ACTIONS:
                 target_role = get_role(target.role_id or "")
+
                 if target_role is not None:
                     investigation_results[actor_id] = (
                         f"{target.name} jamoasi: "
@@ -125,48 +153,55 @@ class GameResolver:
 
             elif action_type in cls.OBSERVE_ACTIONS:
                 target_actions = [
-                    item for item in active_actions
+                    item
+                    for item in active_actions
                     if item.get("target_id") == target_id
-                    and item["actor_id"] != actor_id
+                    and item.get("actor_id") != actor_id
                 ]
+
                 investigation_results[actor_id] = (
-                    f"{target.name}ga tashriflar soni: "
-                    f"{len(target_actions)}"
+                    f"{target.name}ga yo'naltirilgan "
+                    f"harakatlar soni: {len(target_actions)}"
                 )
 
         result.investigated = investigation_results
 
-        # 4. Hujumlar.
+        # 4. Hujumlarni nishonlar bo'yicha yig'ish.
         for action in active_actions:
-            if action["action_type"] not in cls.ATTACK_ACTIONS:
+            if action.get("action_type") not in cls.ATTACK_ACTIONS:
                 continue
 
             target_id = action.get("target_id")
+
             if target_id is None:
                 continue
 
-            actor = game.players.get(action["actor_id"])
+            actor = game.players.get(action.get("actor_id"))
             target = game.players.get(target_id)
 
             if actor is None or not actor.alive:
                 continue
+
             if target is None or not target.alive:
                 continue
 
             attacked.setdefault(target_id, []).append(action)
 
-        # 5. Hujum natijasi.
-        for target_id, attacks in attacked.items():
+        # 5. Hujum natijalarini hisoblash.
+        for target_id, target_attacks in attacked.items():
             target = game.players.get(target_id)
 
             if target is None or not target.alive:
                 continue
 
             bypass_attack = any(
-                action["action_type"] == "hidden_attack"
-                for action in attacks
+                action.get("action_type")
+                in cls.BYPASS_PROTECTION_ACTIONS
+                for action in target_attacks
             )
 
+            # Himoyani chetlab o'tuvchi hujumlar davolashni
+            # avtomatik ravishda chetlab o'tmaydi.
             if target_id in healed:
                 result.messages.append(
                     f"{target.name} tabib yordami bilan omon qoldi."
@@ -179,7 +214,7 @@ class GameResolver:
                 )
                 continue
 
-            success, message = game.eliminate_player(
+            success, _message = game.eliminate_player(
                 target_id,
                 reason="Tungi hujum natijasida",
             )
@@ -187,29 +222,37 @@ class GameResolver:
             if success:
                 result.eliminated.append(target_id)
                 result.messages.append(
-                    f"{target.name} tungi hujum natijasida o'yindan chiqdi."
+                    f"{target.name} tungi hujum natijasida "
+                    "o'yindan chiqdi."
                 )
 
-        # 6. Maxsus harakatlar uchun xabarlar.
+        # 6. Hozircha alohida mexanizmi yo'q maxsus amallar
+        # faqat qayd etiladi. Bu ularning to'liq ishlashini anglatmaydi.
+        recorded_actions = {
+            "trade",
+            "feed",
+            "steal_gold",
+            "influence",
+            "succession",
+            "inspect_treasury",
+            "claim_throne",
+            "visit",
+            "survive",
+            "mislead",
+            "judge",
+        }
+
         for action in active_actions:
-            action_type = action["action_type"]
+            action_type = action.get("action_type")
 
-            if action_type in {
-                "trade",
-                "feed",
-                "steal_gold",
-                "influence",
-                "succession",
-                "inspect_treasury",
-                "claim_throne",
-                "contract_attack",
-                "visit",
-                "survive",
-                "mislead",
-            }:
-                result.messages.append(
-                    f"Maxsus harakat qayd etildi: {action_type}."
-                )
+            if action_type in recorded_actions:
+                actor = game.players.get(action.get("actor_id"))
+
+                if actor is not None and actor.alive:
+                    result.messages.append(
+                        f"{actor.name} maxsus harakatni bajardi: "
+                        f"{action_type}."
+                    )
 
         # 7. Tun yakuni.
         game.night_actions.clear()
@@ -228,3 +271,4 @@ class GameResolver:
 def resolve_night(game: Game) -> NightResolution:
     """Tungi natijalarni hisoblash uchun tashqi funksiya."""
     return GameResolver.resolve_night(game)
+                    
