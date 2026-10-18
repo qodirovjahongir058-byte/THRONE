@@ -271,4 +271,4 @@ class GameResolver:
 def resolve_night(game: Game) -> NightResolution:
     """Tungi natijalarni hisoblash uchun tashqi funksiya."""
     return GameResolver.resolve_night(game)
-                    
+            
