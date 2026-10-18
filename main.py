@@ -10,6 +10,9 @@ from config import settings
 from database import Database
 from game_handlers import router as game_router
 from night_action_handlers import router as night_action_router
+from night_resolution_handlers import (
+    router as night_resolution_router,
+)
 
 
 logging.basicConfig(
@@ -24,13 +27,20 @@ async def main() -> None:
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML
+            parse_mode=ParseMode.HTML,
         ),
     )
 
     dp = Dispatcher()
+
+    # O'yin lobbi va boshlanishi.
     dp.include_router(game_router)
+
+    # Tungi harakatlarni tanlash.
     dp.include_router(night_action_router)
+
+    # Tun natijalarini hisoblash.
+    dp.include_router(night_resolution_router)
 
     database = Database(settings.database_path)
 
