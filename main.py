@@ -1,69 +1,57 @@
-from __future__ import annotations
-
 import asyncio
 import logging
-import sys
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
-from config import BOT_TOKEN
-from database import init_database
-from handlers import game_router, start_router
+from config import settings
+from database import Database
 
 
-def setup_logging() -> None:
-    """Configure application logging."""
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
 
-    logging.basicConfig(
-        level=logging.INFO,
-        format=(
-            "%(asctime)s | %(levelname)s | "
-            "%(name)s | %(message)s"
-        ),
-        stream=sys.stdout,
-    )
+logger = logging.getLogger("THRONE")
 
 
 async def main() -> None:
-    """Start the THRONE application."""
-
-    setup_logging()
-
-    logger = logging.getLogger("throne")
-
-    logger.info("Initializing database...")
-    await init_database()
-
+    """THRONE botini ishga tushiradi."""
     bot = Bot(
-        token=BOT_TOKEN,
+        token=settings.bot_token,
         default=DefaultBotProperties(
             parse_mode=ParseMode.HTML,
         ),
     )
 
-    dp = Dispatcher()
-
-    dp.include_router(start_router)
-    dp.include_router(game_router)
-
-    logger.info("Starting THRONE bot...")
+    dispatcher = Dispatcher()
+    database = Database(settings.database_path)
 
     try:
-        await dp.start_polling(
-            bot,
-            allowed_updates=dp.resolve_used_update_types(),
+        await database.initialize()
+
+        bot_info = await bot.get_me()
+        logger.info(
+            "THRONE ishga tushmoqda: @%s (ID: %s)",
+            bot_info.username,
+            bot_info.id,
         )
+
+        # Keyingi bosqichlarda o'yin va buyruq handlerlari ulanadi.
+        await dispatcher.start_polling(
+            bot,
+            allowed_updates=dispatcher.resolve_used_update_types(),
+        )
+
     finally:
+        await database.close()
         await bot.session.close()
-        logger.info("THRONE bot stopped.")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
-    except KeyboardInterrupt:
-        logging.getLogger("throne").info(
-            "Application stopped by user."
-        )
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("THRONE bot to'xtatildi.")
