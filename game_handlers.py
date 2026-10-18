@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 import uuid
@@ -8,13 +9,16 @@ from aiogram.enums import ChatMemberStatus, ChatType
 from aiogram.filters import Command
 from aiogram.types import (
     CallbackQuery,
-    Message,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    Message,
 )
 
 from config import settings
 from database import Database
+from game_engine import Game
+from role_assignment import assign_roles
+from roles import ROLES
 
 
 logger = logging.getLogger("THRONE.game_handlers")
@@ -26,10 +30,9 @@ MIN_PLAYERS = 7
 MAX_PLAYERS = 36
 
 # Guruhdagi joriy o'yinlar.
-# Kalit — Telegram guruhining chat_id raqami.
 active_games: dict[int, dict] = {}
 
-# Bir guruhda bir vaqtda ikki o'yin ochilishining oldini oladi.
+# Bir guruhda bir vaqtning o'zida ikkita o'yin ochilmasin.
 _group_locks: dict[int, asyncio.Lock] = {}
 
 
@@ -57,7 +60,7 @@ async def is_group_admin(
     chat_id: int,
     user_id: int,
 ) -> bool:
-    """Buyruq yuborgan foydalanuvchi guruh adminimi?"""
+    """Foydalanuvchi guruh administratori ekanini tekshiradi."""
     try:
         member = await bot.get_chat_member(chat_id, user_id)
         return member.status in {
@@ -65,16 +68,12 @@ async def is_group_admin(
             ChatMemberStatus.CREATOR,
         }
     except Exception:
-        logger.exception("Guruh adminini tekshirishda xatolik")
+        logger.exception("Guruh administratorini tekshirishda xatolik")
         return False
 
 
 async def get_database_active_game(chat_id: int):
-    """
-    Bazada ushbu guruh uchun faol o'yin borligini tekshiradi.
-    Bot qayta ishga tushganidan keyin ham eski faol o'yin
-    yangi o'yin ochilishiga to'sqinlik qiladi.
-    """
+    """Guruhda tugamagan o'yin borligini bazadan tekshiradi."""
     await database.initialize()
 
     async with aiosqlite.connect(database.database_path) as db:
@@ -83,10 +82,7 @@ async def get_database_active_game(chat_id: int):
             SELECT game_id, creator_id, phase
             FROM games
             WHERE chat_id = ?
-              AND UPPER(phase) NOT IN (
-                  'FINISHED',
-                  'STOPPED'
-              )
+              AND UPPER(phase) NOT IN ('FINISHED', 'STOPPED')
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -96,6 +92,7 @@ async def get_database_active_game(chat_id: int):
 
 
 async def get_game_players(game_id: str) -> list[int]:
+    """O'yin ishtirokchilarining Telegram ID raqamlarini qaytaradi."""
     await database.initialize()
 
     async with aiosqlite.connect(database.database_path) as db:
@@ -109,12 +106,32 @@ async def get_game_players(game_id: str) -> list[int]:
             (game_id,),
         )
         rows = await cursor.fetchall()
-        return [row[0] for row in rows]
+        return [int(row[0]) for row in rows]
+
+
+async def get_game_player_details(game_id: str) -> list[dict]:
+    """O'yinchilar va ularning ismlarini bazadan oladi."""
+    await database.initialize()
+
+    async with aiosqlite.connect(database.database_path) as db:
+        db.row_factory = aiosqlite.Row
+        cursor = await db.execute(
+            """
+            SELECT gp.user_id, p.full_name, p.username
+            FROM game_players AS gp
+            LEFT JOIN players AS p ON p.user_id = gp.user_id
+            WHERE gp.game_id = ?
+            ORDER BY gp.joined_at ASC
+            """,
+            (game_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
 
 
 @router.message(Command("newgame"))
 async def new_game(message: Message, bot: Bot) -> None:
-    """Guruhda yangi o'yin ochadi."""
+    """Guruhda yangi o'yin uchun lobbi ochadi."""
     if message.chat.type not in {
         ChatType.GROUP,
         ChatType.SUPERGROUP,
@@ -136,16 +153,13 @@ async def new_game(message: Message, bot: Bot) -> None:
         )
         return
 
-    lock = get_group_lock(chat_id)
-
-    async with lock:
+    async with get_group_lock(chat_id):
         existing = await get_database_active_game(chat_id)
 
         if existing is not None:
             await message.answer(
-                "⚔️ Bu guruhda o‘yin allaqachon faol.\n\n"
-                "Yangi o‘yin ochish uchun avval joriy o‘yin "
-                "tugashi yoki to‘xtatilishi kerak."
+                "⚔️ Bu guruhda allaqachon faol o‘yin bor.\n\n"
+                "Avval joriy o‘yin tugashi kerak."
             )
             return
 
@@ -158,10 +172,15 @@ async def new_game(message: Message, bot: Bot) -> None:
                 creator_id=creator_id,
                 phase="LOBBY",
             )
-        except aiosqlite.IntegrityError:
+            await database.add_history(
+                game_id,
+                "LOBBY_CREATED",
+                "Yangi o‘yin uchun lobbi ochildi.",
+            )
+        except Exception:
+            logger.exception("Lobbi yaratishda xatolik")
             await message.answer(
-                "❌ O‘yinni yaratib bo‘lmadi. "
-                "Iltimos, qayta urinib ko‘ring."
+                "❌ O‘yinni yaratib bo‘lmadi. Qayta urinib ko‘ring."
             )
             return
 
@@ -176,28 +195,33 @@ async def new_game(message: Message, bot: Bot) -> None:
         "👑 <b>THRONE — Yangi o‘yin</b>\n\n"
         "🏰 Qirollik eshiklari ochildi!\n"
         f"👥 O‘yinchilar: 0/{MAX_PLAYERS}\n"
-        f"⚔️ O‘yinni boshlash uchun kamida {MIN_PLAYERS} kishi kerak.\n\n"
-        "O‘yinga qo‘shilish uchun quyidagi tugmani bosing.\n"
-        "Guruh administratori o‘yinni /startgame orqali boshlaydi.",
+        f"⚔️ Boshlash uchun kamida {MIN_PLAYERS} kishi kerak.\n\n"
+        "O‘yinga qo‘shilish uchun tugmani bosing.\n"
+        "Guruh administratori /startgame buyrug‘i bilan boshlaydi.",
         reply_markup=lobby_keyboard(game_id),
     )
 
 
-@router.callback_query(lambda query: (
-    query.data is not None
-    and query.data.startswith("throne_join:")
-))
+@router.callback_query(
+    lambda query: (
+        query.data is not None
+        and query.data.startswith("throne_join:")
+    )
+)
 async def join_game(query: CallbackQuery, bot: Bot) -> None:
-    """O'yinchini faol o'yinga qo'shadi."""
+    """Foydalanuvchini faol lobbiga qo'shadi."""
     if not query.from_user or not query.message:
-        await query.answer("O‘yin ma’lumotlari topilmadi.", show_alert=True)
+        await query.answer(
+            "O‘yin ma’lumotlari topilmadi.",
+            show_alert=True,
+        )
         return
 
     chat = query.message.chat
 
     if chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
         await query.answer(
-            "O‘yinga guruhdagi tugma orqali qo‘shiling.",
+            "Guruhdagi o‘yin tugmasidan foydalaning.",
             show_alert=True,
         )
         return
@@ -206,9 +230,7 @@ async def join_game(query: CallbackQuery, bot: Bot) -> None:
     chat_id = chat.id
     user = query.from_user
 
-    lock = get_group_lock(chat_id)
-
-    async with lock:
+    async with get_group_lock(chat_id):
         existing = await get_database_active_game(chat_id)
 
         if existing is None or existing[0] != game_id:
@@ -218,9 +240,7 @@ async def join_game(query: CallbackQuery, bot: Bot) -> None:
             )
             return
 
-        phase = str(existing[2]).upper()
-
-        if phase != "LOBBY":
+        if str(existing[2]).upper() != "LOBBY":
             await query.answer(
                 "O‘yinga qo‘shilish vaqti tugagan.",
                 show_alert=True,
@@ -243,21 +263,33 @@ async def join_game(query: CallbackQuery, bot: Bot) -> None:
             )
             return
 
-        await database.ensure_player(
-            user_id=user.id,
-            full_name=user.full_name,
-            username=user.username,
-        )
+        try:
+            await database.ensure_player(
+                user_id=user.id,
+                full_name=user.full_name,
+                username=user.username,
+            )
+            await database.add_game_player(
+                game_id=game_id,
+                user_id=user.id,
+            )
+            await database.add_history(
+                game_id,
+                "PLAYER_JOINED",
+                f"{user.full_name} o‘yinga qo‘shildi.",
+            )
+        except Exception:
+            logger.exception("O'yinchini qo'shishda xatolik")
+            await query.answer(
+                "Qo‘shilishda xatolik yuz berdi. Qayta urinib ko‘ring.",
+                show_alert=True,
+            )
+            return
 
-        await database.add_game_player(
-            game_id=game_id,
-            user_id=user.id,
-        )
+        updated_count = len(players) + 1
 
         if chat_id in active_games:
             active_games[chat_id]["players"] = players + [user.id]
-
-        updated_count = len(players) + 1
 
     await query.answer("Siz o‘yinga qo‘shildingiz!")
 
@@ -267,40 +299,40 @@ async def join_game(query: CallbackQuery, bot: Bot) -> None:
             "🏰 Qirollik eshiklari ochiq!\n"
             f"👥 O‘yinchilar: {updated_count}/{MAX_PLAYERS}\n"
             f"⚔️ Boshlash uchun kamida {MIN_PLAYERS} kishi kerak.\n\n"
-            "Guruh administratori /startgame buyrug‘i bilan o‘yinni boshlaydi.",
+            "Guruh administratori /startgame orqali o‘yinni boshlaydi.",
             reply_markup=lobby_keyboard(game_id),
         )
     except Exception:
-        logger.debug("Lobbi xabarini yangilab bo'lmadi", exc_info=True)
+        logger.debug(
+            "Lobbi xabarini yangilab bo‘lmadi.",
+            exc_info=True,
+        )
 
 
 @router.message(Command("startgame"))
 async def start_game(message: Message, bot: Bot) -> None:
-    """Lobbidagi o'yinchilar sonini tekshiradi."""
+    """O'yinni boshlaydi, rollarni tarqatadi va birinchi tunni ochadi."""
     if message.chat.type not in {
         ChatType.GROUP,
         ChatType.SUPERGROUP,
     }:
-        await message.answer(
-            "O‘yinni guruhda boshlash kerak."
-        )
+        await message.answer("O‘yinni guruhda boshlash kerak.")
         return
 
     if not message.from_user:
         return
 
     chat_id = message.chat.id
-    user_id = message.from_user.id
+    requester_id = message.from_user.id
 
-    if not await is_group_admin(bot, chat_id, user_id):
+    if not await is_group_admin(bot, chat_id, requester_id):
         await message.answer(
             "🔒 O‘yinni faqat guruh administratori boshlashi mumkin."
         )
         return
 
-    lock = get_group_lock(chat_id)
-
-    async with lock:
+    # Avval lobbi ma'lumotlarini tekshirib, o'yinni ROLE_REVEAL holatiga o'tkazamiz.
+    async with get_group_lock(chat_id):
         existing = await get_database_active_game(chat_id)
 
         if existing is None:
@@ -310,36 +342,200 @@ async def start_game(message: Message, bot: Bot) -> None:
             return
 
         game_id, creator_id, phase = existing
-        phase = str(phase).upper()
 
-        if phase != "LOBBY":
+        if str(phase).upper() != "LOBBY":
             await message.answer(
                 "⚔️ O‘yin allaqachon boshlangan yoki faol bosqichda."
             )
             return
 
-        players = await get_game_players(game_id)
+        player_rows = await get_game_player_details(game_id)
+        player_ids = [int(row["user_id"]) for row in player_rows]
 
-        if len(players) < MIN_PLAYERS:
+        if len(player_ids) < MIN_PLAYERS:
             await message.answer(
-                f"❌ O‘yinni boshlash uchun kamida {MIN_PLAYERS} o‘yinchi kerak.\n"
-                f"Hozir: {len(players)}/{MAX_PLAYERS}"
+                f"❌ Boshlash uchun kamida {MIN_PLAYERS} o‘yinchi kerak.\n"
+                f"Hozir: {len(player_ids)}/{MAX_PLAYERS}"
             )
             return
 
-        # O'yin holatini bazada saqlaymiz.
+        if len(player_ids) > MAX_PLAYERS:
+            await message.answer(
+                f"❌ O‘yinchilar soni {MAX_PLAYERS} nafardan oshmasligi kerak."
+            )
+            return
+
+        game = Game(
+            chat_id=chat_id,
+            creator_id=int(creator_id),
+            game_id=str(game_id),
+        )
+
+        for row in player_rows:
+            user_id = int(row["user_id"])
+            name = row["full_name"] or str(user_id)
+            username = row["username"]
+
+            added, error_message = game.add_player(
+                user_id=user_id,
+                name=name,
+                username=username,
+            )
+            if not added:
+                await message.answer(f"❌ {error_message}")
+                return
+
+        started, start_message = game.start(requester_is_admin=True)
+        if not started:
+            await message.answer(f"❌ {start_message}")
+            return
+
+        # Rollarning tasodifiy taqsimoti.
+        result = assign_roles(game)
+
+        if not result.success:
+            await message.answer(
+                f"❌ Rollarni taqsimlab bo‘lmadi: {result.message}"
+            )
+            return
+
+        # Rollarni ma'lumotlar bazasiga yozamiz.
+        try:
+            for user_id, role in result.assignments.items():
+                await database.update_game_player(
+                    str(game_id),
+                    int(user_id),
+                    role_id=role.id,
+                    team=role.team.value,
+                )
+
+            await database.update_game(
+                str(game_id),
+                phase="ROLE_REVEAL",
+                round_number=0,
+            )
+            await database.add_history(
+                str(game_id),
+                "ROLES_ASSIGNED",
+                f"{len(player_ids)} o‘yinchiga rollar taqsimlandi.",
+            )
+        except Exception:
+            logger.exception("Rollarni bazaga saqlashda xatolik")
+            await message.answer(
+                "❌ Rollarni saqlashda xatolik yuz berdi. "
+                "O‘yin boshlanmadi."
+            )
+            return
+
+        active_games[chat_id] = {
+            "game_id": str(game_id),
+            "creator_id": int(creator_id),
+            "players": player_ids,
+            "phase": "ROLE_REVEAL",
+            "game": game,
+        }
+
+    # Har bir o'yinchiga rolini shaxsiy xabarda yuboramiz.
+    failed_users: list[int] = []
+
+    for user_id, role in result.assignments.items():
+        role_name = role.name
+        team_name = role.team.value
+
+        private_text = (
+            "👑 <b>THRONE — Sizning rolingiz</b>\n\n"
+            f"🎭 <b>Rol:</b> {role_name}\n"
+            f"🏰 <b>Jamoa:</b> {team_name}\n\n"
+            f"⚔️ <b>Qobiliyat:</b> {role.ability}\n"
+            f"🏆 <b>Maqsad:</b> {role.win_condition}\n\n"
+            "🤫 Rolingizni boshqa o‘yinchilarga oshkor qilmang."
+        )
+
+        try:
+            await bot.send_message(
+                chat_id=int(user_id),
+                text=private_text,
+                parse_mode="HTML",
+            )
+        except Exception:
+            logger.warning(
+                "Rolni shaxsiy xabarda yuborib bo'lmadi: user_id=%s",
+                user_id,
+            )
+            failed_users.append(int(user_id))
+
+    # Telegram bot foydalanuvchi bilan avval shaxsiy chat ochmagan bo'lsa,
+    # bot unga birinchi bo'lib yozolmasligi mumkin.
+    if failed_users:
+        async with get_group_lock(chat_id):
+            await database.update_game(
+                str(game_id),
+                phase="STOPPED",
+                finished=True,
+            )
+            await database.add_history(
+                str(game_id),
+                "GAME_STOPPED",
+                "Ayrim o‘yinchilarga rolni shaxsiy xabarda yuborib bo‘lmadi.",
+            )
+
+            if chat_id in active_games:
+                active_games[chat_id]["phase"] = "STOPPED"
+
+        await message.answer(
+            "⛔ <b>O‘yin to‘xtatildi.</b>\n\n"
+            "Quyidagi o‘yinchilarga shaxsiy xabar yuborilmadi:\n"
+            f"👥 Soni: {len(failed_users)}\n\n"
+            "Ular botni ochib, /start buyrug‘ini yuborishlari kerak. "
+            "Shundan so‘ng /newgame orqali yangi o‘yin oching."
+        )
+        return
+
+    # Barcha rollar yuborilgach, birinchi tunni boshlaymiz.
+    night_started, night_message = game.begin_night()
+
+    if not night_started:
+        async with get_group_lock(chat_id):
+            await database.update_game(
+                str(game_id),
+                phase="STOPPED",
+                finished=True,
+            )
+            await database.add_history(
+                str(game_id),
+                "GAME_STOPPED",
+                f"Birinchi tunni boshlash xatosi: {night_message}",
+            )
+            if chat_id in active_games:
+                active_games[chat_id]["phase"] = "STOPPED"
+
+        await message.answer(
+            "❌ Birinchi tunni boshlashda xatolik yuz berdi. "
+            "O‘yin to‘xtatildi."
+        )
+        return
+
+    async with get_group_lock(chat_id):
         await database.update_game(
-            game_id,
-            phase="ROLE_REVEAL",
+            str(game_id),
+            phase=game.phase.value,
+            round_number=game.round_number,
+        )
+        await database.add_history(
+            str(game_id),
+            "NIGHT_STARTED",
+            f"{game.round_number}-tun boshlandi.",
         )
 
         if chat_id in active_games:
-            active_games[chat_id]["phase"] = "ROLE_REVEAL"
+            active_games[chat_id]["phase"] = game.phase.value
+            active_games[chat_id]["game"] = game
 
     await message.answer(
-        "👑 <b>THRONE</b>\n\n"
-        f"⚔️ O‘yin boshlanishi tasdiqlandi!\n"
-        f"👥 Ishtirokchilar: {len(players)}\n\n"
-        "⚠️ Rollarni taqsimlash va tun bosqichini boshlash "
-        "keyingi integratsiya bosqichida ulanadi."
-      )
+        "👑 <b>THRONE — O‘YIN BOSHLANDI</b>\n\n"
+        f"👥 <b>Ishtirokchilar:</b> {len(player_ids)}\n"
+        "🎭 Rollar o‘yinchilarga shaxsiy xabarda yuborildi.\n\n"
+        f"🌙 <b>{game.round_number}-tun boshlandi.</b>\n"
+        "Har bir o‘yinchi o‘z rolini sir saqlashi kerak."
+        )
+                                                  
