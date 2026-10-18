@@ -1,3 +1,4 @@
+
 import asyncio
 import logging
 
@@ -8,6 +9,7 @@ from aiogram.enums import ParseMode
 from config import settings
 from database import Database
 from game_handlers import router as game_router
+from night_action_handlers import router as night_action_router
 
 
 logging.basicConfig(
@@ -28,6 +30,7 @@ async def main() -> None:
 
     dp = Dispatcher()
     dp.include_router(game_router)
+    dp.include_router(night_action_router)
 
     database = Database(settings.database_path)
 
@@ -54,3 +57,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
         logger.info("Bot to'xtatildi.")
+        
