@@ -14,11 +14,7 @@ from aiogram.types import (
 
 from game_engine import GamePhase
 from game_flow import GameFlow
-from game_handlers import (
-    active_games,
-    database,
-    is_group_admin,
-)
+from game_handlers import active_games, database, is_group_admin
 from last_words_handlers import finish_last_words
 from night_action_handlers import send_night_action_prompts
 
@@ -44,10 +40,7 @@ def get_session(chat_id: int) -> dict | None:
 
 
 async def require_group(message: Message) -> bool:
-    if message.chat.type not in {
-        ChatType.GROUP,
-        ChatType.SUPERGROUP,
-    }:
+    if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
         await message.answer(
             "Bu buyruqni THRONE o'yin guruhida ishlating."
         )
@@ -71,6 +64,30 @@ async def require_admin(message: Message, bot: Bot) -> bool:
         return False
 
     return True
+
+
+async def save_game_state(
+    game,
+    *,
+    event_type: str | None = None,
+    description: str | None = None,
+    finished: bool = False,
+) -> None:
+    """O'yinning joriy holatini va kerak bo'lsa tarixini saqlaydi."""
+    await database.update_game(
+        game.game_id,
+        phase=game.phase.value,
+        round_number=game.round_number,
+        winner=game.winner if finished else None,
+        finished=finished,
+    )
+
+    if event_type and description:
+        await database.add_history(
+            game.game_id,
+            event_type,
+            description,
+        )
 
 
 def voting_keyboard(
@@ -109,15 +126,18 @@ async def publish_voting(
     game,
     revote: bool = False,
 ) -> None:
+    session = get_session(chat_id)
+
+    if session is None or session["game"] is not game:
+        return
+
     if revote:
         title = (
             "⚖️ <b>THRONE — QAYTA OVOZ BERISH</b>\n\n"
             "Ovozlar teng keldi. "
-            "Durangdagi nomzodlardan birini tanlang:"
+            "Faqat durangdagi nomzodlardan birini tanlang:"
         )
-
-        flow = active_games[chat_id]["flow"]
-        candidate_ids = set(flow.voting.revote_candidates)
+        candidate_ids = set(session["flow"].voting.revote_candidates)
     else:
         title = (
             "⚖️ <b>THRONE — OVOZ BERISH</b>\n\n"
@@ -146,7 +166,7 @@ async def publish_voting(
             delivered += 1
         except Exception:
             logger.info(
-                "Ovoz berish xabarini yuborib bo'lmadi: %s",
+                "Ovoz berish xabari yuborilmadi: %s",
                 voter.user_id,
             )
 
@@ -157,16 +177,12 @@ async def publish_voting(
             if revote
             else "⚖️ Ovoz berish boshlandi."
         )
-        + "\n"
-        + f"Shaxsiy xabar yuborilgan o'yinchilar: {delivered}.",
+        + f"\nShaxsiy xabar yuborilgan o'yinchilar: {delivered}.",
     )
 
 
 @router.message(Command("discussion"))
-async def start_discussion(
-    message: Message,
-    bot: Bot,
-) -> None:
+async def start_discussion(message: Message, bot: Bot) -> None:
     if not await require_group(message):
         return
 
@@ -176,9 +192,7 @@ async def start_discussion(
     session = get_session(message.chat.id)
 
     if session is None:
-        await message.answer(
-            "❌ Bu guruhda faol o'yin topilmadi."
-        )
+        await message.answer("❌ Bu guruhda faol o'yin topilmadi.")
         return
 
     game = session["game"]
@@ -198,20 +212,13 @@ async def start_discussion(
     session["phase"] = game.phase.value
 
     try:
-        await database.update_game(
-            game.game_id,
-            phase=game.phase.value,
-            round_number=game.round_number,
-        )
-        await database.add_history(
-            game.game_id,
-            "DISCUSSION_STARTED",
-            "Muhokama boshlandi.",
+        await save_game_state(
+            game,
+            event_type="DISCUSSION_STARTED",
+            description="Muhokama boshlandi.",
         )
     except Exception:
-        logger.exception(
-            "Muhokama holatini bazaga yozishda xatolik"
-        )
+        logger.exception("Muhokama holatini saqlashda xatolik")
 
     await message.answer(
         "💬 <b>THRONE — MUHOKAMA</b>\n\n"
@@ -221,10 +228,7 @@ async def start_discussion(
 
 
 @router.message(Command("vote"))
-async def start_vote(
-    message: Message,
-    bot: Bot,
-) -> None:
+async def start_vote(message: Message, bot: Bot) -> None:
     if not await require_group(message):
         return
 
@@ -234,9 +238,7 @@ async def start_vote(
     session = get_session(message.chat.id)
 
     if session is None:
-        await message.answer(
-            "❌ Bu guruhda faol o'yin topilmadi."
-        )
+        await message.answer("❌ Bu guruhda faol o'yin topilmadi.")
         return
 
     game = session["game"]
@@ -249,20 +251,13 @@ async def start_vote(
     session["phase"] = game.phase.value
 
     try:
-        await database.update_game(
-            game.game_id,
-            phase=game.phase.value,
-            round_number=game.round_number,
-        )
-        await database.add_history(
-            game.game_id,
-            "VOTING_STARTED",
-            "Ovoz berish boshlandi.",
+        await save_game_state(
+            game,
+            event_type="VOTING_STARTED",
+            description="Ovoz berish boshlandi.",
         )
     except Exception:
-        logger.exception(
-            "Ovoz berishni bazaga yozishda xatolik"
-        )
+        logger.exception("Ovoz berish holatini saqlashda xatolik")
 
     await publish_voting(
         bot=bot,
@@ -277,9 +272,7 @@ async def start_vote(
         and query.data.startswith("throne_vote:")
     )
 )
-async def cast_vote_callback(
-    query: CallbackQuery,
-) -> None:
+async def cast_vote_callback(query: CallbackQuery) -> None:
     if not query.from_user or not query.data:
         await query.answer(
             "Ovoz ma'lumotlari topilmadi.",
@@ -339,10 +332,7 @@ async def cast_vote_callback(
     )
 
     if not result.success:
-        await query.answer(
-            result.message,
-            show_alert=True,
-        )
+        await query.answer(result.message, show_alert=True)
         return
 
     await query.answer("✅ Ovozingiz qabul qilindi.")
@@ -354,16 +344,11 @@ async def cast_vote_callback(
             f"{query.from_user.id} ovoz berdi.",
         )
     except Exception:
-        logger.exception(
-            "Ovoz tarixini saqlashda xatolik"
-        )
+        logger.exception("Ovoz tarixini saqlashda xatolik")
 
 
 @router.message(Command("endvote"))
-async def end_vote(
-    message: Message,
-    bot: Bot,
-) -> None:
+async def end_vote(message: Message, bot: Bot) -> None:
     if not await require_group(message):
         return
 
@@ -374,9 +359,7 @@ async def end_vote(
     session = get_session(chat_id)
 
     if session is None:
-        await message.answer(
-            "❌ Bu guruhda faol o'yin topilmadi."
-        )
+        await message.answer("❌ Bu guruhda faol o'yin topilmadi.")
         return
 
     game = session["game"]
@@ -392,15 +375,13 @@ async def end_vote(
 
     if vote_result and vote_result.revote_required:
         try:
-            await database.add_history(
-                game.game_id,
-                "REVOTE_STARTED",
-                "Ovozlar teng kelgani uchun qayta ovoz boshlandi.",
+            await save_game_state(
+                game,
+                event_type="REVOTE_STARTED",
+                description="Ovozlar teng keldi; qayta ovoz boshlandi.",
             )
         except Exception:
-            logger.exception(
-                "Qayta ovoz tarixini saqlashda xatolik"
-            )
+            logger.exception("Qayta ovoz holatini saqlashda xatolik")
 
         await message.answer(
             "⚖️ <b>Ovozlar teng keldi!</b>\n\n"
@@ -416,30 +397,22 @@ async def end_vote(
         return
 
     if vote_result and vote_result.eliminated_id is not None:
-        player = game.players.get(
-            vote_result.eliminated_id
-        )
+        eliminated_id = vote_result.eliminated_id
+        player = game.players.get(eliminated_id)
 
         try:
             await database.update_game_player(
                 game.game_id,
-                vote_result.eliminated_id,
+                eliminated_id,
                 alive=False,
             )
-            await database.update_game(
-                game.game_id,
-                phase=game.phase.value,
-                round_number=game.round_number,
-            )
-            await database.add_history(
-                game.game_id,
-                "VOTING_RESOLVED",
-                result.message,
+            await save_game_state(
+                game,
+                event_type="VOTING_RESOLVED",
+                description=result.message,
             )
         except Exception:
-            logger.exception(
-                "Ovoz natijasini saqlashda xatolik"
-            )
+            logger.exception("Ovoz natijasini saqlashda xatolik")
 
         await message.answer(
             "⚖️ <b>THRONE — OVOZ NATIJASI</b>\n\n"
@@ -463,28 +436,35 @@ async def end_vote(
         f"{result.message}"
     )
 
-    if result.victory_result and result.victory_result.finished:
+    victory = result.victory_result
+
+    if victory and victory.finished:
+        session["phase"] = game.phase.value
+
+        try:
+            await save_game_state(
+                game,
+                event_type="GAME_FINISHED",
+                description=victory.message,
+                finished=True,
+            )
+        except Exception:
+            logger.exception("G'alaba holatini bazaga saqlashda xatolik")
+
         await message.answer(
             "🏆 <b>O'YIN YAKUNLANDI</b>\n\n"
-            f"{result.victory_result.message}"
+            f"{victory.message}"
         )
         return
 
     try:
-        await database.update_game(
-            game.game_id,
-            phase=game.phase.value,
-            round_number=game.round_number,
-        )
-        await database.add_history(
-            game.game_id,
-            "VOTING_RESOLVED",
-            result.message,
+        await save_game_state(
+            game,
+            event_type="VOTING_RESOLVED",
+            description=result.message,
         )
     except Exception:
-        logger.exception(
-            "Ovoz natijasini bazaga yozishda xatolik"
-        )
+        logger.exception("Ovoz natijasini bazaga yozishda xatolik")
 
     if game.phase == GamePhase.NIGHT:
         await message.answer(
@@ -496,4 +476,4 @@ async def end_vote(
             bot=bot,
             game_id=game.game_id,
     )
-        
+    
