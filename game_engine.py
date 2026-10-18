@@ -1,3 +1,4 @@
+
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
@@ -55,11 +56,19 @@ class Game:
 
     @property
     def alive_players(self) -> list[Player]:
-        return [p for p in self.players.values() if p.alive]
+        return [
+            player
+            for player in self.players.values()
+            if player.alive
+        ]
 
     @property
     def dead_players(self) -> list[Player]:
-        return [p for p in self.players.values() if not p.alive]
+        return [
+            player
+            for player in self.players.values()
+            if not player.alive
+        ]
 
     def add_player(
         self,
@@ -81,6 +90,7 @@ class Game:
             name=name,
             username=username,
         )
+
         self.history.append(f"{name} o'yinga qo'shildi.")
         return True, "Siz o'yinga muvaffaqiyatli qo'shildingiz."
 
@@ -89,15 +99,22 @@ class Game:
             return False, "Boshlangan o'yindan bu usulda chiqib bo'lmaydi."
 
         player = self.players.pop(user_id, None)
+
         if player is None:
             return False, "O'yinchi topilmadi."
 
         self.history.append(f"{player.name} o'yindan chiqdi.")
         return True, "O'yindan chiqdingiz."
 
-    def can_start(self, requester_is_admin: bool) -> tuple[bool, str]:
+    def can_start(
+        self,
+        requester_is_admin: bool,
+    ) -> tuple[bool, str]:
         if not requester_is_admin:
-            return False, "O'yinni faqat guruh administratori boshlashi mumkin."
+            return (
+                False,
+                "O'yinni faqat guruh administratori boshlashi mumkin.",
+            )
 
         if self.phase != GamePhase.LOBBY:
             return False, "O'yin allaqachon boshlangan yoki yakunlangan."
@@ -110,7 +127,10 @@ class Game:
 
         return True, "O'yinni boshlash mumkin."
 
-    def start(self, requester_is_admin: bool) -> tuple[bool, str]:
+    def start(
+        self,
+        requester_is_admin: bool,
+    ) -> tuple[bool, str]:
         allowed, message = self.can_start(requester_is_admin)
 
         if not allowed:
@@ -120,6 +140,7 @@ class Game:
         self.phase_started_at = time.time()
         self.round_number = 0
         self.history.append("O'yin boshlandi.")
+
         return True, "O'yin boshlandi. Rollarni taqsimlash mumkin."
 
     def assign_role(self, user_id: int, role_id: str) -> bool:
@@ -127,6 +148,7 @@ class Game:
             return False
 
         player = self.players.get(user_id)
+
         if player is None:
             return False
 
@@ -139,16 +161,13 @@ class Game:
             for player in self.players.values()
         )
 
-    
+    def begin_night(self) -> tuple[bool, str]:
         if self.phase not in (
             GamePhase.ROLE_REVEAL,
             GamePhase.DAY,
             GamePhase.DISCUSSION,
             GamePhase.VOTING,
             GamePhase.LAST_WORDS,
-        ):
-            return False, "Hozir tunni boshlash mumkin emas."
-            
         ):
             return False, "Hozir tunni boshlash mumkin emas."
 
@@ -166,6 +185,7 @@ class Game:
             player.vote_target = None
 
         self.history.append(f"{self.round_number}-tun boshlandi.")
+
         return True, f"{self.round_number}-tun boshlandi."
 
     def begin_day(self) -> tuple[bool, str]:
@@ -175,6 +195,7 @@ class Game:
         self.phase = GamePhase.DAY
         self.phase_started_at = time.time()
         self.history.append(f"{self.round_number}-kun boshlandi.")
+
         return True, "Tong otdi. Kun bosqichi boshlandi."
 
     def begin_discussion(self) -> tuple[bool, str]:
@@ -184,6 +205,7 @@ class Game:
         self.phase = GamePhase.DISCUSSION
         self.phase_started_at = time.time()
         self.history.append("Muhokama boshlandi.")
+
         return True, "Muhokama boshlandi."
 
     def begin_voting(self) -> tuple[bool, str]:
@@ -198,6 +220,7 @@ class Game:
             player.vote_target = None
 
         self.history.append("Ovoz berish boshlandi.")
+
         return True, "Ovoz berish boshlandi."
 
     def cast_vote(
@@ -222,6 +245,7 @@ class Game:
 
         self.votes[voter_id] = target_id
         voter.vote_target = target_id
+
         return True, "Ovozingiz qabul qilindi."
 
     def get_vote_results(self) -> dict[int, int]:
@@ -248,6 +272,7 @@ class Game:
             return None, False
 
         highest_votes = max(results.values())
+
         candidates = [
             user_id
             for user_id, votes in results.items()
@@ -274,21 +299,28 @@ class Game:
 
         player.alive = False
         self.history.append(f"{player.name}: {reason}.")
+
         return True, f"{player.name} o'yindan chiqarildi."
 
-    def start_last_words(self, user_id: int) -> tuple[bool, str]:
+    def start_last_words(
+        self,
+        user_id: int,
+    ) -> tuple[bool, str]:
         if self.phase != GamePhase.VOTING:
             return False, "Hozir oxirgi so'z bosqichi emas."
 
         player = self.players.get(user_id)
+
         if player is None or player.alive:
             return False, "Oxirgi so'z faqat chiqarilgan o'yinchiga beriladi."
 
         self.phase = GamePhase.LAST_WORDS
         self.phase_started_at = time.time()
+
         self.history.append(
             f"{player.name} uchun oxirgi so'z bosqichi boshlandi."
         )
+
         return True, (
             f"{player.name} uchun oxirgi so'z vaqti: "
             f"{self.LAST_WORDS_SECONDS} soniya."
@@ -303,38 +335,61 @@ class Game:
             return False, "Hozir oxirgi so'z bosqichi emas."
 
         player = self.players.get(user_id)
+
         if player is None or player.alive:
-            return False, "Bu bosqichda faqat chiqarilgan o'yinchi yozishi mumkin."
+            return False, (
+                "Bu bosqichda faqat chiqarilgan o'yinchi yozishi mumkin."
+            )
 
         if time.time() - self.phase_started_at > self.LAST_WORDS_SECONDS:
             return False, "Oxirgi so'z uchun ajratilgan vaqt tugadi."
 
         player.last_words = message.strip()[:1000]
         self.history.append(f"{player.name} oxirgi so'zini aytdi.")
+
         return True, "Oxirgi so'zingiz saqlandi."
 
     def last_words_time_left(self) -> int:
         elapsed = time.time() - self.phase_started_at
-        return max(0, self.LAST_WORDS_SECONDS - int(elapsed))
+
+        return max(
+            0,
+            self.LAST_WORDS_SECONDS - int(elapsed),
+        )
 
     def finish(self, winner: str) -> tuple[bool, str]:
-        if self.phase in (GamePhase.FINISHED, GamePhase.STOPPED):
+        if self.phase in (
+            GamePhase.FINISHED,
+            GamePhase.STOPPED,
+        ):
             return False, "O'yin allaqachon yakunlangan."
 
         self.winner = winner
         self.phase = GamePhase.FINISHED
         self.phase_started_at = time.time()
+
         self.history.append(f"O'yin yakunlandi. G'olib: {winner}.")
+
         return True, f"O'yin yakunlandi. G'olib: {winner}."
 
-    def stop(self, requester_is_admin: bool) -> tuple[bool, str]:
+    def stop(
+        self,
+        requester_is_admin: bool,
+    ) -> tuple[bool, str]:
         if not requester_is_admin:
-            return False, "O'yinni faqat guruh administratori to'xtata oladi."
+            return False, (
+                "O'yinni faqat guruh administratori to'xtata oladi."
+            )
 
-        if self.phase in (GamePhase.FINISHED, GamePhase.STOPPED):
+        if self.phase in (
+            GamePhase.FINISHED,
+            GamePhase.STOPPED,
+        ):
             return False, "O'yin allaqachon yakunlangan."
 
         self.phase = GamePhase.STOPPED
         self.phase_started_at = time.time()
         self.history.append("O'yin administrator tomonidan to'xtatildi.")
+
         return True, "O'yin to'xtatildi."
+        
