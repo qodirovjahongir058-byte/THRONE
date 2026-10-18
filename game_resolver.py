@@ -1,333 +1,230 @@
-from __future__ import annotations
-
 from dataclasses import dataclass, field
 
-from game_actions import ActionType, GameAction
-from game_engine import GameState
+from game_engine import Game, GamePhase
+from roles import get_role, Team
 
 
-@dataclass(slots=True)
-class ResolutionContext:
-    """Temporary state used while resolving one night."""
-
-    blocked_players: set[int] = field(default_factory=set)
-    protected_players: set[int] = field(default_factory=set)
-    attacked_players: set[int] = field(default_factory=set)
-    poisoned_players: set[int] = field(default_factory=set)
-    weakened_players: set[int] = field(default_factory=set)
-
-    observations: dict[int, list[int]] = field(default_factory=dict)
-    results: list[str] = field(default_factory=list)
-
-
-ACTION_PRIORITY: dict[ActionType, int] = {
-    ActionType.OBSERVE: 10,
-    ActionType.PROTECT: 20,
-    ActionType.BLOCK: 30,
-    ActionType.POISON: 40,
-    ActionType.WEAKEN: 50,
-    ActionType.ATTACK: 60,
-    ActionType.SPECIAL: 70,
-}
-
-
-@dataclass(frozen=True, slots=True)
-class ResolutionResult:
-    """Result of resolving all submitted night actions."""
-
+@dataclass
+class NightResolution:
     success: bool
-    context: ResolutionContext
-    eliminated_player_ids: tuple[int, ...]
+    messages: list[str] = field(default_factory=list)
+    eliminated: list[int] = field(default_factory=list)
+    blocked: list[int] = field(default_factory=list)
+    healed: list[int] = field(default_factory=list)
+    investigated: dict[int, str] = field(default_factory=dict)
 
 
-def sort_actions(
-    actions: list[GameAction],
-) -> list[GameAction]:
-    """Return actions in the defined resolution order."""
+class GameResolver:
+    """THRONE o'yinidagi tungi harakatlar natijasini hisoblaydi."""
 
-    return sorted(
-        actions,
-        key=lambda action: ACTION_PRIORITY[action.action_type],
-    )
+    ATTACK_ACTIONS = {
+        "attack",
+        "team_attack",
+        "hidden_attack",
+        "contract_attack",
+    }
 
+    BLOCK_ACTIONS = {"block", "sabotage"}
+    PROTECT_ACTIONS = {"protect", "guard"}
+    HEAL_ACTIONS = {"heal"}
+    INVESTIGATE_ACTIONS = {"investigate", "memory_check"}
+    OBSERVE_ACTIONS = {"observe"}
 
-def resolve_night(
-    game: GameState,
-    actions: list[GameAction],
-) -> ResolutionResult:
-    """
-    Resolve all submitted actions for one night.
-
-    Actions are processed in the defined order so that
-    blocking can affect actions that have not yet been resolved.
-    """
-
-    context = ResolutionContext()
-
-    valid_actions = _get_valid_actions(
-        game=game,
-        actions=actions,
-    )
-
-    for action in sort_actions(valid_actions):
-        actor = game.get_player(action.actor_id)
-
-        if actor is None or not actor.alive:
-            continue
-
-        if action.actor_id in context.blocked_players:
-            context.results.append(
-                f"action_blocked:{action.actor_id}"
+    @classmethod
+    def resolve_night(cls, game: Game) -> NightResolution:
+        if game.phase != GamePhase.NIGHT:
+            return NightResolution(
+                success=False,
+                messages=["Tungi harakatlarni faqat tun bosqichida yechish mumkin."],
             )
-            continue
 
-        _apply_action(
-            game=game,
-            action=action,
-            context=context,
-        )
+        result = NightResolution(success=True)
+        actions = list(game.night_actions)
 
-    eliminated = _resolve_attacks(
-        game=game,
-        context=context,
-    )
+        blocked: set[int] = set()
+        protected: set[int] = set()
+        healed: set[int] = set()
+        attacked: dict[int, list[dict]] = {}
+        investigation_results: dict[int, str] = {}
 
-    return ResolutionResult(
-        success=True,
-        context=context,
-        eliminated_player_ids=tuple(eliminated),
-    )
+        # 1. Bloklash.
+        for action in actions:
+            if action["action_type"] not in cls.BLOCK_ACTIONS:
+                continue
 
+            target_id = action.get("target_id")
+            if target_id is None:
+                continue
 
-def _get_valid_actions(
-    game: GameState,
-    actions: list[GameAction],
-) -> list[GameAction]:
-    """Filter actions submitted by valid living players."""
+            actor = game.players.get(action["actor_id"])
+            target = game.players.get(target_id)
 
-    valid_actions: list[GameAction] = []
+            if actor is None or not actor.alive:
+                continue
+            if target is None or not target.alive:
+                continue
 
-    for action in actions:
-        actor = game.get_player(action.actor_id)
+            blocked.add(target_id)
 
-        if actor is None:
-            continue
+        result.blocked = sorted(blocked)
 
-        if not actor.alive:
-            continue
+        # Bloklangan o'yinchilarning oddiy harakatlari bekor qilinadi.
+        active_actions = [
+            action for action in actions
+            if action["actor_id"] not in blocked
+        ]
 
-        if action.target_id is not None:
-            target = game.get_player(action.target_id)
+        # 2. Himoya va davolash.
+        for action in active_actions:
+            action_type = action["action_type"]
+            target_id = action.get("target_id")
+
+            if target_id is None:
+                continue
+
+            actor = game.players.get(action["actor_id"])
+            target = game.players.get(target_id)
+
+            if actor is None or not actor.alive:
+                continue
+            if target is None or not target.alive:
+                continue
+
+            if action_type in cls.PROTECT_ACTIONS:
+                protected.add(target_id)
+
+            elif action_type in cls.HEAL_ACTIONS:
+                healed.add(target_id)
+
+        result.healed = sorted(healed)
+
+        # 3. Tekshiruv va kuzatuv.
+        for action in active_actions:
+            action_type = action["action_type"]
+            target_id = action.get("target_id")
+            actor_id = action["actor_id"]
+
+            if target_id is None:
+                continue
+
+            actor = game.players.get(actor_id)
+            target = game.players.get(target_id)
+
+            if actor is None or not actor.alive:
+                continue
+            if target is None or not target.alive:
+                continue
+
+            if action_type in cls.INVESTIGATE_ACTIONS:
+                target_role = get_role(target.role_id or "")
+                if target_role is not None:
+                    investigation_results[actor_id] = (
+                        f"{target.name} jamoasi: "
+                        f"{target_role.team.value}"
+                    )
+
+            elif action_type in cls.OBSERVE_ACTIONS:
+                target_actions = [
+                    item for item in active_actions
+                    if item.get("target_id") == target_id
+                    and item["actor_id"] != actor_id
+                ]
+                investigation_results[actor_id] = (
+                    f"{target.name}ga tashriflar soni: "
+                    f"{len(target_actions)}"
+                )
+
+        result.investigated = investigation_results
+
+        # 4. Hujumlar.
+        for action in active_actions:
+            if action["action_type"] not in cls.ATTACK_ACTIONS:
+                continue
+
+            target_id = action.get("target_id")
+            if target_id is None:
+                continue
+
+            actor = game.players.get(action["actor_id"])
+            target = game.players.get(target_id)
+
+            if actor is None or not actor.alive:
+                continue
+            if target is None or not target.alive:
+                continue
+
+            attacked.setdefault(target_id, []).append(action)
+
+        # 5. Hujum natijasi.
+        for target_id, attacks in attacked.items():
+            target = game.players.get(target_id)
 
             if target is None or not target.alive:
                 continue
 
-        if action.secondary_target_id is not None:
-            secondary_target = game.get_player(
-                action.secondary_target_id
+            bypass_attack = any(
+                action["action_type"] == "hidden_attack"
+                for action in attacks
             )
 
-            if (
-                secondary_target is None
-                or not secondary_target.alive
-            ):
+            if target_id in healed:
+                result.messages.append(
+                    f"{target.name} tabib yordami bilan omon qoldi."
+                )
                 continue
 
-        valid_actions.append(action)
+            if target_id in protected and not bypass_attack:
+                result.messages.append(
+                    f"{target.name} qo'riqchi tomonidan himoyalandi."
+                )
+                continue
 
-    return valid_actions
-
-
-def _apply_action(
-    game: GameState,
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Apply one action to the night resolution context."""
-
-    if action.action_type == ActionType.OBSERVE:
-        _apply_observe(
-            game=game,
-            action=action,
-            context=context,
-        )
-
-    elif action.action_type == ActionType.PROTECT:
-        _apply_protect(
-            action=action,
-            context=context,
-        )
-
-    elif action.action_type == ActionType.BLOCK:
-        _apply_block(
-            action=action,
-            context=context,
-        )
-
-    elif action.action_type == ActionType.POISON:
-        _apply_poison(
-            action=action,
-            context=context,
-        )
-
-    elif action.action_type == ActionType.WEAKEN:
-        _apply_weaken(
-            action=action,
-            context=context,
-        )
-
-    elif action.action_type == ActionType.ATTACK:
-        _apply_attack(
-            action=action,
-            context=context,
-        )
-
-    elif action.action_type == ActionType.SPECIAL:
-        context.results.append(
-            f"special_action:{action.actor_id}"
-        )
-
-
-def _apply_observe(
-    game: GameState,
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Record an observation target."""
-
-    if action.target_id is None:
-        return
-
-    target = game.get_player(action.target_id)
-
-    if target is None or not target.alive:
-        return
-
-    context.observations.setdefault(
-        action.actor_id,
-        [],
-    ).append(target.user_id)
-
-    context.results.append(
-        f"observed:{action.actor_id}:{target.user_id}"
-    )
-
-
-def _apply_protect(
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Protect a player from ordinary attacks."""
-
-    if action.target_id is None:
-        return
-
-    context.protected_players.add(
-        action.target_id
-    )
-
-    context.results.append(
-        f"protected:{action.target_id}"
-    )
-
-
-def _apply_block(
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Block the target player's remaining night action."""
-
-    if action.target_id is None:
-        return
-
-    context.blocked_players.add(
-        action.target_id
-    )
-
-    context.results.append(
-        f"blocked:{action.target_id}"
-    )
-
-
-def _apply_poison(
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Mark a player as poisoned."""
-
-    if action.target_id is None:
-        return
-
-    context.poisoned_players.add(
-        action.target_id
-    )
-
-    context.results.append(
-        f"poisoned:{action.target_id}"
-    )
-
-
-def _apply_weaken(
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Mark a player as weakened."""
-
-    if action.target_id is None:
-        return
-
-    context.weakened_players.add(
-        action.target_id
-    )
-
-    context.results.append(
-        f"weakened:{action.target_id}"
-    )
-
-
-def _apply_attack(
-    action: GameAction,
-    context: ResolutionContext,
-) -> None:
-    """Register an ordinary attack."""
-
-    if action.target_id is None:
-        return
-
-    context.attacked_players.add(
-        action.target_id
-    )
-
-    context.results.append(
-        f"attack:{action.actor_id}:{action.target_id}"
-    )
-
-
-def _resolve_attacks(
-    game: GameState,
-    context: ResolutionContext,
-) -> list[int]:
-    """Resolve ordinary attacks against protected players."""
-
-    eliminated: list[int] = []
-
-    for player_id in context.attacked_players:
-        player = game.get_player(player_id)
-
-        if player is None or not player.alive:
-            continue
-
-        if player_id in context.protected_players:
-            context.results.append(
-                f"attack_blocked:{player_id}"
+            success, message = game.eliminate_player(
+                target_id,
+                reason="Tungi hujum natijasida",
             )
-            continue
 
-        player.alive = False
-        eliminated.append(player_id)
+            if success:
+                result.eliminated.append(target_id)
+                result.messages.append(
+                    f"{target.name} tungi hujum natijasida o'yindan chiqdi."
+                )
 
-        context.results.append(
-            f"player_eliminated:{player_id}"
+        # 6. Maxsus harakatlar uchun xabarlar.
+        for action in active_actions:
+            action_type = action["action_type"]
+
+            if action_type in {
+                "trade",
+                "feed",
+                "steal_gold",
+                "influence",
+                "succession",
+                "inspect_treasury",
+                "claim_throne",
+                "contract_attack",
+                "visit",
+                "survive",
+                "mislead",
+            }:
+                result.messages.append(
+                    f"Maxsus harakat qayd etildi: {action_type}."
+                )
+
+        # 7. Tun yakuni.
+        game.night_actions.clear()
+
+        for player in game.players.values():
+            player.night_action = None
+
+        game.history.append(
+            f"{game.round_number}-tun yakunlandi. "
+            f"Chiqarilgan o'yinchilar: {len(result.eliminated)}."
         )
 
-    return eliminated
+        return result
+
+
+def resolve_night(game: Game) -> NightResolution:
+    """Tungi natijalarni hisoblash uchun tashqi funksiya."""
+    return GameResolver.resolve_night(game)
