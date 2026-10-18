@@ -112,7 +112,8 @@ async def publish_voting(
     if revote:
         title = (
             "⚖️ <b>THRONE — QAYTA OVOZ BERISH</b>\n\n"
-            "Ovozlar teng keldi. Durangdagi nomzodlardan birini tanlang:"
+            "Ovozlar teng keldi. "
+            "Durangdagi nomzodlardan birini tanlang:"
         )
 
         flow = active_games[chat_id]["flow"]
@@ -162,7 +163,10 @@ async def publish_voting(
 
 
 @router.message(Command("discussion"))
-async def start_discussion(message: Message, bot: Bot) -> None:
+async def start_discussion(
+    message: Message,
+    bot: Bot,
+) -> None:
     if not await require_group(message):
         return
 
@@ -172,7 +176,9 @@ async def start_discussion(message: Message, bot: Bot) -> None:
     session = get_session(message.chat.id)
 
     if session is None:
-        await message.answer("❌ Bu guruhda faol o'yin topilmadi.")
+        await message.answer(
+            "❌ Bu guruhda faol o'yin topilmadi."
+        )
         return
 
     game = session["game"]
@@ -203,7 +209,9 @@ async def start_discussion(message: Message, bot: Bot) -> None:
             "Muhokama boshlandi.",
         )
     except Exception:
-        logger.exception("Muhokama holatini bazaga yozishda xatolik")
+        logger.exception(
+            "Muhokama holatini bazaga yozishda xatolik"
+        )
 
     await message.answer(
         "💬 <b>THRONE — MUHOKAMA</b>\n\n"
@@ -213,7 +221,10 @@ async def start_discussion(message: Message, bot: Bot) -> None:
 
 
 @router.message(Command("vote"))
-async def start_vote(message: Message, bot: Bot) -> None:
+async def start_vote(
+    message: Message,
+    bot: Bot,
+) -> None:
     if not await require_group(message):
         return
 
@@ -223,7 +234,9 @@ async def start_vote(message: Message, bot: Bot) -> None:
     session = get_session(message.chat.id)
 
     if session is None:
-        await message.answer("❌ Bu guruhda faol o'yin topilmadi.")
+        await message.answer(
+            "❌ Bu guruhda faol o'yin topilmadi."
+        )
         return
 
     game = session["game"]
@@ -247,7 +260,9 @@ async def start_vote(message: Message, bot: Bot) -> None:
             "Ovoz berish boshlandi.",
         )
     except Exception:
-        logger.exception("Ovoz berishni bazaga yozishda xatolik")
+        logger.exception(
+            "Ovoz berishni bazaga yozishda xatolik"
+        )
 
     await publish_voting(
         bot=bot,
@@ -262,7 +277,9 @@ async def start_vote(message: Message, bot: Bot) -> None:
         and query.data.startswith("throne_vote:")
     )
 )
-async def cast_vote_callback(query: CallbackQuery) -> None:
+async def cast_vote_callback(
+    query: CallbackQuery,
+) -> None:
     if not query.from_user or not query.data:
         await query.answer(
             "Ovoz ma'lumotlari topilmadi.",
@@ -337,11 +354,16 @@ async def cast_vote_callback(query: CallbackQuery) -> None:
             f"{query.from_user.id} ovoz berdi.",
         )
     except Exception:
-        logger.exception("Ovoz tarixini saqlashda xatolik")
+        logger.exception(
+            "Ovoz tarixini saqlashda xatolik"
+        )
 
 
 @router.message(Command("endvote"))
-async def end_vote(message: Message, bot: Bot) -> None:
+async def end_vote(
+    message: Message,
+    bot: Bot,
+) -> None:
     if not await require_group(message):
         return
 
@@ -352,7 +374,9 @@ async def end_vote(message: Message, bot: Bot) -> None:
     session = get_session(chat_id)
 
     if session is None:
-        await message.answer("❌ Bu guruhda faol o'yin topilmadi.")
+        await message.answer(
+            "❌ Bu guruhda faol o'yin topilmadi."
+        )
         return
 
     game = session["game"]
@@ -374,7 +398,9 @@ async def end_vote(message: Message, bot: Bot) -> None:
                 "Ovozlar teng kelgani uchun qayta ovoz boshlandi.",
             )
         except Exception:
-            logger.exception("Qayta ovoz tarixini saqlashda xatolik")
+            logger.exception(
+                "Qayta ovoz tarixini saqlashda xatolik"
+            )
 
         await message.answer(
             "⚖️ <b>Ovozlar teng keldi!</b>\n\n"
@@ -390,7 +416,9 @@ async def end_vote(message: Message, bot: Bot) -> None:
         return
 
     if vote_result and vote_result.eliminated_id is not None:
-        player = game.players.get(vote_result.eliminated_id)
+        player = game.players.get(
+            vote_result.eliminated_id
+        )
 
         try:
             await database.update_game_player(
@@ -409,17 +437,18 @@ async def end_vote(message: Message, bot: Bot) -> None:
                 result.message,
             )
         except Exception:
-            logger.exception("Ovoz natijasini saqlashda xatolik")
+            logger.exception(
+                "Ovoz natijasini saqlashda xatolik"
+            )
 
         await message.answer(
             "⚖️ <b>THRONE — OVOZ NATIJASI</b>\n\n"
             f"💀 {player.name if player else 'O‘yinchi'} "
             "ovoz natijasida chiqarildi.\n\n"
-            "🗣 Chiqarilgan o'yinchiga oxirgi so'z uchun "
-            "30 soniya berildi. U botga shaxsiy xabar yozishi mumkin."
+            "🗣 Oxirgi so'z uchun 30 soniya berildi. "
+            "Chiqarilgan o'yinchi botga shaxsiy xabar yozishi mumkin."
         )
 
-        # Oxirgi so'z taymerini fon rejimida boshlash.
         asyncio.create_task(
             finish_last_words(
                 bot=bot,
@@ -453,7 +482,9 @@ async def end_vote(message: Message, bot: Bot) -> None:
             result.message,
         )
     except Exception:
-        logger.exception("Ovoz natijasini bazaga yozishda xatolik")
+        logger.exception(
+            "Ovoz natijasini bazaga yozishda xatolik"
+        )
 
     if game.phase == GamePhase.NIGHT:
         await message.answer(
@@ -464,5 +495,5 @@ async def end_vote(message: Message, bot: Bot) -> None:
         await send_night_action_prompts(
             bot=bot,
             game_id=game.game_id,
-        )
+    )
         
