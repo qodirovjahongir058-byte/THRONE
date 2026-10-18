@@ -539,3 +539,9 @@ async def start_game(message: Message, bot: Bot) -> None:
         "Har bir o‘yinchi o‘z rolini sir saqlashi kerak."
         )
                                                   
+    from night_action_handlers import send_night_action_prompts
+
+    await send_night_action_prompts(
+        bot=bot,
+        game_id=str(game_id),
+            )
