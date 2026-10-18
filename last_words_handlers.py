@@ -10,7 +10,6 @@ from aiogram.types import Message
 from game_engine import GamePhase
 from game_handlers import active_games, database
 from game_flow import GameFlow
-from game_victory import GameVictory
 from night_action_handlers import send_night_action_prompts
 
 
@@ -67,16 +66,20 @@ async def finish_last_words(
         return
 
     session["phase"] = game.phase.value
+    finished = game.phase == GamePhase.FINISHED
 
     try:
         await database.update_game(
             game.game_id,
             phase=game.phase.value,
             round_number=game.round_number,
+            winner=game.winner if finished else None,
+            finished=finished,
         )
+
         await database.add_history(
             game.game_id,
-            "LAST_WORDS_FINISHED",
+            "GAME_FINISHED" if finished else "LAST_WORDS_FINISHED",
             result.message,
         )
     except Exception:
@@ -84,7 +87,7 @@ async def finish_last_words(
             "Oxirgi so'z natijasini bazaga yozishda xatolik"
         )
 
-    if game.phase == GamePhase.FINISHED:
+    if finished:
         await bot.send_message(
             chat_id,
             "🏆 <b>THRONE — O'YIN YAKUNLANDI</b>\n\n"
@@ -192,6 +195,7 @@ async def capture_last_words(message: Message, bot: Bot) -> None:
                 f"{game.players[message.from_user.id].name}:\n"
                 f"{message.text or ''}",
             )
+
             await database.add_history(
                 game.game_id,
                 "LAST_WORDS_SAVED",
@@ -203,4 +207,4 @@ async def capture_last_words(message: Message, bot: Bot) -> None:
             )
 
         return
-  
+    
