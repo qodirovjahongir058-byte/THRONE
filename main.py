@@ -7,6 +7,7 @@ from aiogram.enums import ParseMode
 
 from config import settings
 from database import Database
+from game_handlers import router as game_router
 
 
 logging.basicConfig(
@@ -14,44 +15,42 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-logger = logging.getLogger("THRONE")
+logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
-    """THRONE botini ishga tushiradi."""
     bot = Bot(
         token=settings.bot_token,
         default=DefaultBotProperties(
-            parse_mode=ParseMode.HTML,
+            parse_mode=ParseMode.HTML
         ),
     )
 
-    dispatcher = Dispatcher()
+    dp = Dispatcher()
+    dp.include_router(game_router)
+
     database = Database(settings.database_path)
 
     try:
         await database.initialize()
+        logger.info("THRONE ma'lumotlar bazasi tayyor.")
 
-        bot_info = await bot.get_me()
-        logger.info(
-            "THRONE ishga tushmoqda: @%s (ID: %s)",
-            bot_info.username,
-            bot_info.id,
-        )
+        await bot.delete_webhook(drop_pending_updates=True)
+        logger.info("THRONE bot ishga tushmoqda.")
 
-        # Keyingi bosqichlarda o'yin va buyruq handlerlari ulanadi.
-        await dispatcher.start_polling(
+        await dp.start_polling(
             bot,
-            allowed_updates=dispatcher.resolve_used_update_types(),
+            allowed_updates=dp.resolve_used_update_types(),
         )
 
     finally:
         await database.close()
         await bot.session.close()
+        logger.info("THRONE bot to'xtadi.")
 
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        logger.info("THRONE bot to'xtatildi.")
+        logger.info("Bot to'xtatildi.")
