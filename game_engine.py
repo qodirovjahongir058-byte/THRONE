@@ -139,12 +139,16 @@ class Game:
             for player in self.players.values()
         )
 
-    def begin_night(self) -> tuple[bool, str]:
+    
         if self.phase not in (
             GamePhase.ROLE_REVEAL,
             GamePhase.DAY,
             GamePhase.DISCUSSION,
             GamePhase.VOTING,
+            GamePhase.LAST_WORDS,
+        ):
+            return False, "Hozir tunni boshlash mumkin emas."
+            
         ):
             return False, "Hozir tunni boshlash mumkin emas."
 
