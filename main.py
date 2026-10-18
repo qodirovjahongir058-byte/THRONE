@@ -8,11 +8,13 @@ from aiogram.enums import ParseMode
 
 from config import settings
 from database import Database
+
 from game_handlers import router as game_router
 from night_action_handlers import router as night_action_router
 from night_resolution_handlers import (
     router as night_resolution_router,
 )
+from day_phase_handlers import router as day_phase_router
 
 
 logging.basicConfig(
@@ -20,7 +22,7 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("THRONE")
 
 
 async def main() -> None:
@@ -33,14 +35,17 @@ async def main() -> None:
 
     dp = Dispatcher()
 
-    # O'yin lobbi va boshlanishi.
+    # 1. O'yin lobbi va boshlanishi.
     dp.include_router(game_router)
 
-    # Tungi harakatlarni tanlash.
+    # 2. Tungi harakatlar.
     dp.include_router(night_action_router)
 
-    # Tun natijalarini hisoblash.
+    # 3. Tun natijalarini hisoblash.
     dp.include_router(night_resolution_router)
+
+    # 4. Kunduzgi muhokama va ovoz berish.
+    dp.include_router(day_phase_router)
 
     database = Database(settings.database_path)
 
