@@ -15,6 +15,7 @@ from night_resolution_handlers import (
     router as night_resolution_router,
 )
 from day_phase_handlers import router as day_phase_router
+from last_words_handlers import router as last_words_router
 
 
 logging.basicConfig(
@@ -46,6 +47,10 @@ async def main() -> None:
 
     # 4. Kunduzgi muhokama va ovoz berish.
     dp.include_router(day_phase_router)
+
+    # 5. Oxirgi so'zlar va shaxsiy xabarlar.
+    # Catch-all handler oxirida turishi kerak.
+    dp.include_router(last_words_router)
 
     database = Database(settings.database_path)
 
