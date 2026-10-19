@@ -1,33 +1,22 @@
+
+from __future__ import annotations
+
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Team(str, Enum):
+# ============================================================
+# THRONE — ROLLAR TIZIMI
+# Ushbu fayl yangi arxitektura uchun yozilgan.
+# Boshqa fayllar shu yerdagi ID va turlardan foydalanadi.
+# ============================================================
+
+
+class Team(StrEnum):
     KRON = "KRON"
     SOYA = "SOYA"
     ISYON = "ISYON"
     MUSTAQIL = "MUSTAQIL"
-
-    # Eski kodlar bilan vaqtinchalik moslik
-    YAKKA = "YAKKA"
-    LEGION = "LEGION"
-
-
-class RoleSide(str, Enum):
-    KRON = "KRON"
-    SOYA = "SOYA"
-    ISYON = "ISYON"
-    MUSTAQIL = "MUSTAQIL"
-
-
-class RoleAbilityType(str, Enum):
-    INFORMATION = "information"
-    PROTECTION = "protection"
-    CONTROL = "control"
-    ATTACK = "attack"
-    ECONOMY = "economy"
-    SPECIAL = "special"
-    PASSIVE = "passive"
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,283 +24,440 @@ class Role:
     id: str
     name: str
     team: Team
+    description: str
     ability: str
-    action: str | None
-    win_condition: str
-    passive: bool = False
-
-    @property
-    def key(self) -> str:
-        return self.id
-
-    @property
-    def side(self) -> RoleSide:
-        return RoleSide(self.team.value)
-
-    @property
-    def victory_condition(self) -> str:
-        return self.win_condition
-
-    @property
-    def ability_type(self) -> RoleAbilityType:
-        if self.passive or self.action is None:
-            return RoleAbilityType.PASSIVE
-
-        if self.action in {
-            "investigate", "observe", "memory_check"
-        }:
-            return RoleAbilityType.INFORMATION
-
-        if self.action in {"protect", "guard", "heal"}:
-            return RoleAbilityType.PROTECTION
-
-        if self.action == "block":
-            return RoleAbilityType.CONTROL
-
-        if self.action in {
-            "attack", "team_attack", "hidden_attack",
-            "attack_bypass", "contract_attack"
-        }:
-            return RoleAbilityType.ATTACK
-
-        if self.action in {"steal_gold", "trade"}:
-            return RoleAbilityType.ECONOMY
-
-        return RoleAbilityType.SPECIAL
+    night_action: str | None = None
+    night_priority: int = 0
+    unique: bool = False
 
 
-RoleDefinition = Role
+# ============================================================
+# 36 TA ROL
+# KRON: 12 | SOYA: 10 | ISYON: 10 | MUSTAQIL: 4
+# ============================================================
 
+_ROLE_LIST: tuple[Role, ...] = (
+
+    # --------------------------------------------------------
+    # KRON — 12 ROL
+    # --------------------------------------------------------
+
+    Role(
+        id="shoh",
+        name="Shoh",
+        team=Team.KRON,
+        description="Kron taxtining hukmdori. Kron jamoasi g‘alabasini ta’minlashi kerak.",
+        ability="Bir kechada bitta raqib qobiliyatini to‘xtata oladi. Kuchli himoyaga ega.",
+        night_action="block",
+        night_priority=10,
+        unique=True,
+    ),
+    Role(
+        id="malika",
+        name="Malika",
+        team=Team.KRON,
+        description="Kron oilasining muhim a’zosi.",
+        ability="Har kecha bir o‘yinchini tanlab, uning himoyalangan yoki himoyasizligini tekshiradi.",
+        night_action="inspect_defense",
+        night_priority=30,
+        unique=True,
+    ),
+    Role(
+        id="shahzoda",
+        name="Shahzoda",
+        team=Team.KRON,
+        description="Taxtning vorisi.",
+        ability="Bir marta tungi hujumdan omon qolish imkoniyatiga ega.",
+        night_action=None,
+        unique=True,
+    ),
+    Role(
+        id="vazir",
+        name="Vazir",
+        team=Team.KRON,
+        description="Shohning siyosiy maslahatchisi.",
+        ability="Har kecha bir o‘yinchi haqida ma’lumot to‘playdi.",
+        night_action="investigate",
+        night_priority=40,
+        unique=True,
+    ),
+    Role(
+        id="bosh_qomondon",
+        name="Bosh qo‘mondon",
+        team=Team.KRON,
+        description="Kron qo‘shinining boshlig‘i.",
+        ability="Har kecha bir o‘yinchini hujumdan himoya qiladi.",
+        night_action="protect",
+        night_priority=20,
+        unique=True,
+    ),
+    Role(
+        id="qirol_qoriqchisi",
+        name="Qirol qo‘riqchisi",
+        team=Team.KRON,
+        description="Taxt va qirollik oilasini himoya qiladi.",
+        ability="Tanlangan o‘yinchiga qarshi bitta tungi hujumni qaytarishga urinadi.",
+        night_action="guard",
+        night_priority=20,
+        unique=True,
+    ),
+    Role(
+        id="qozi",
+        name="Qozi",
+        team=Team.KRON,
+        description="Qirollik qonunlarini himoya qiladi.",
+        ability="Har kecha bir o‘yinchining harakatini tekshirib, shubhali faoliyat haqida ma’lumot oladi.",
+        night_action="investigate",
+        night_priority=40,
+        unique=True,
+    ),
+    Role(
+        id="xazinachi",
+        name="Xazinachi",
+        team=Team.KRON,
+        description="Qirollik xazinasini boshqaradi.",
+        ability="Har bir muvaffaqiyatli o‘yin yakunida qo‘shimcha Gold olish tizimiga ulanadi.",
+        night_action=None,
+        unique=True,
+    ),
+    Role(
+        id="ritsar",
+        name="Ritsar",
+        team=Team.KRON,
+        description="Kron uchun jang qiladigan sodiq jangchi.",
+        ability="Har kecha bir o‘yinchini himoya qiladi.",
+        night_action="protect",
+        night_priority=20,
+    ),
+    Role(
+        id="xizmatkor",
+        name="Xizmatkor",
+        team=Team.KRON,
+        description="Saroydagi voqealardan xabardor.",
+        ability="Har kecha bir o‘yinchini kuzatib, uning kim bilan uchrashganini bilishga urinadi.",
+        night_action="observe",
+        night_priority=40,
+    ),
+    Role(
+        id="tinch_aholi",
+        name="Tinch aholi",
+        team=Team.KRON,
+        description="Qirollikning oddiy fuqarosi.",
+        ability="Maxsus tungi qobiliyati yo‘q. Muhokama va ovoz berish orqali Kronni himoya qiladi.",
+        night_action=None,
+    ),
+    Role(
+        id="aygoqchi",
+        name="Ayg‘oqchi",
+        team=Team.KRON,
+        description="Dushmanlar orasidan yashirin ma’lumot izlaydi.",
+        ability="Har kecha bir o‘yinchining jamoasini aniqlashga urinadi.",
+        night_action="investigate_team",
+        night_priority=40,
+        unique=True,
+    ),
+
+    # --------------------------------------------------------
+    # SOYA — 10 ROL
+    # --------------------------------------------------------
+
+    Role(
+        id="soya_hukmdori",
+        name="Soya hukmdori",
+        team=Team.SOYA,
+        description="Soya jamoasining boshlig‘i.",
+        ability="Soya jamoasining tungi hujumini belgilaydi.",
+        night_action="team_attack",
+        night_priority=60,
+        unique=True,
+    ),
+    Role(
+        id="soya_qotili",
+        name="Soya qotili",
+        team=Team.SOYA,
+        description="Soya hukmdorining asosiy jangchisi.",
+        ability="Jamoaviy hujumda qatnashadi.",
+        night_action="team_attack",
+        night_priority=60,
+    ),
+    Role(
+        id="soya_josusi",
+        name="Soya josusi",
+        team=Team.SOYA,
+        description="Nishonlar haqida ma’lumot yig‘ib, Soya hukmdoriga yetkazadi.",
+        ability="Har kecha bir o‘yinchining jamoasini tekshiradi.",
+        night_action="investigate_team",
+        night_priority=40,
+        unique=True,
+    ),
+    Role(
+        id="zaharsoz",
+        name="Zaharsoz",
+        team=Team.SOYA,
+        description="Dushmanlarni zahar orqali zaiflashtiradi.",
+        ability="Belgilangan tungi harakat orqali bitta o‘yinchini zaharlashi mumkin.",
+        night_action="poison",
+        night_priority=50,
+    ),
+    Role(
+        id="soya_tabibi",
+        name="Soya tabibi",
+        team=Team.SOYA,
+        description="Soya a’zolarini saqlab qolishga urinadi.",
+        ability="Har kecha bitta Soya a’zosini himoya qiladi.",
+        night_action="protect_ally",
+        night_priority=20,
+    ),
+    Role(
+        id="qorongu_vazir",
+        name="Qorong‘u vazir",
+        team=Team.SOYA,
+        description="Raqiblarning rejalarini izdan chiqaradi.",
+        ability="Bir o‘yinchining tungi qobiliyatini to‘xtatishga urinadi.",
+        night_action="block",
+        night_priority=10,
+    ),
+    Role(
+        id="soya_ayg oqchisi",
+        name="Soya kuzatuvchisi",
+        team=Team.SOYA,
+        description="Dushmanlarning tungi harakatlarini kuzatadi.",
+        ability="Tanlangan o‘yinchining tungi harakati haqida ma’lumot oladi.",
+        night_action="observe",
+        night_priority=40,
+    ),
+    Role(
+        id="soxta_maslahatchi",
+        name="Soxta maslahatchi",
+        team=Team.SOYA,
+        description="O‘zini ishonchli maslahatchidek ko‘rsatadi.",
+        ability="Tekshiruvlarda chalg‘ituvchi natija berish mexanizmiga ega.",
+        night_action="mislead",
+        night_priority=35,
+    ),
+    Role(
+        id="soya_jallodi",
+        name="Soya jallodi",
+        team=Team.SOYA,
+        description="Soya hukmdorining maxsus topshiriqlarini bajaradi.",
+        ability="Jamoaviy hujumga qo‘shiladi.",
+        night_action="team_attack",
+        night_priority=60,
+    ),
+    Role(
+        id="soya_qorovuli",
+        name="Soya qorovuli",
+        team=Team.SOYA,
+        description="Soya a’zolarining xavfsizligini saqlaydi.",
+        ability="Har kecha bitta sherigini himoya qilishga urinadi.",
+        night_action="protect_ally",
+        night_priority=20,
+    ),
+
+    # --------------------------------------------------------
+    # ISYON — 10 ROL
+    # --------------------------------------------------------
+
+    Role(
+        id="isyon_boshligi",
+        name="Isyon boshlig‘i",
+        team=Team.ISYON,
+        description="Qirollik hokimiyatini ag‘darishni maqsad qiladi.",
+        ability="Isyon jamoasining maxsus harakatlarini boshqaradi.",
+        night_action="rebellion_action",
+        night_priority=50,
+        unique=True,
+    ),
+    Role(
+        id="isyon_jangchisi",
+        name="Isyon jangchisi",
+        team=Team.ISYON,
+        description="Isyon uchun kurashadi.",
+        ability="Isyon jamoasining hujumida qatnashadi.",
+        night_action="rebellion_attack",
+        night_priority=60,
+    ),
+    Role(
+        id="isyon josusi",
+        name="Isyon josusi",
+        team=Team.ISYON,
+        description="Raqib jamoalar haqida ma’lumot izlaydi.",
+        ability="Har kecha bir o‘yinchining jamoasini aniqlashga urinadi.",
+        night_action="investigate_team",
+        night_priority=40,
+    ),
+    Role(
+        id="fitnachi",
+        name="Fitnachi",
+        team=Team.ISYON,
+        description="O‘yinchilar orasida kelishmovchilik keltirib chiqaradi.",
+        ability="Tanlangan o‘yinchining harakatiga xalaqit berishga urinadi.",
+        night_action="block",
+        night_priority=10,
+    ),
+    Role(
+        id="isyon_tabibi",
+        name="Isyon tabibi",
+        team=Team.ISYON,
+        description="Isyonchilarni saqlab qoladi.",
+        ability="Har kecha bitta o‘yinchini himoya qiladi.",
+        night_action="protect",
+        night_priority=20,
+    ),
+    Role(
+        id="isyon_mergan",
+        name="Isyon mergani",
+        team=Team.ISYON,
+        description="Isyonning uzoq masofali jangchisi.",
+        ability="Jamoaviy hujumda qatnashadi.",
+        night_action="rebellion_attack",
+        night_priority=60,
+    ),
+    Role(
+        id="isyon_qorovuli",
+        name="Isyon qorovuli",
+        team=Team.ISYON,
+        description="Isyon a’zolarini himoya qiladi.",
+        ability="Tanlangan isyonchini hujumdan saqlashga urinadi.",
+        night_action="protect_ally",
+        night_priority=20,
+    ),
+    Role(
+        id="isyon_usta",
+        name="Isyon ustasi",
+        team=Team.ISYON,
+        description="Yashirin rejalarni amalga oshiradi.",
+        ability="Bir o‘yinchining maxsus harakatini zaiflashtirishga urinadi.",
+        night_action="weaken",
+        night_priority=15,
+    ),
+    Role(
+        id="isyon_targibotchisi",
+        name="Isyon targ‘ibotchisi",
+        team=Team.ISYON,
+        description="Kunduzgi muhokamada odamlarni o‘z tomoniga og‘diradi.",
+        ability="Ovoz berish mexanizmidagi maxsus ta’sir tizimiga ulanadi.",
+        night_action=None,
+    ),
+    Role(
+        id="yashirin_isyonchi",
+        name="Yashirin isyonchi",
+        team=Team.ISYON,
+        description="O‘z jamoasini yashirincha qo‘llab-quvvatlaydi.",
+        ability="Tekshiruvlarda o‘zini yashirish mexanizmiga ega.",
+        night_action="conceal",
+        night_priority=35,
+    ),
+
+    # --------------------------------------------------------
+    # MUSTAQIL — 4 ROL
+    # --------------------------------------------------------
+
+    Role(
+        id="yollanma_qotil",
+        name="Yollanma qotil",
+        team=Team.MUSTAQIL,
+        description="Boshqa jamoalardan mustaqil ravishda o‘z maqsadini ko‘zlaydi.",
+        ability="Shaxsiy g‘alaba shartlariga muvofiq nishonga hujum qiladi.",
+        night_action="solo_attack",
+        night_priority=60,
+        unique=True,
+    ),
+    Role(
+        id="soya_sayyohi",
+        name="Soya sayyohi",
+        team=Team.MUSTAQIL,
+        description="O‘z yo‘lidan boradigan sirli o‘yinchi.",
+        ability="Har kecha o‘zini yashirishga urinadi.",
+        night_action="conceal",
+        night_priority=35,
+        unique=True,
+    ),
+    Role(
+        id="qasoskor",
+        name="Qasoskor",
+        team=Team.MUSTAQIL,
+        description="Shaxsiy qasosini olish uchun kurashadi.",
+        ability="Belgilangan shaxsiy maqsad bajarilganda g‘alaba qozonadi.",
+        night_action="revenge",
+        night_priority=55,
+        unique=True,
+    ),
+    Role(
+        id="omon_qoluvchi",
+        name="Omon qoluvchi",
+        team=Team.MUSTAQIL,
+        description="Asosiy maqsadi o‘yin oxirigacha tirik qolish.",
+        ability="Bir necha marta foydalanish mumkin bo‘lgan himoya mexanizmiga ega.",
+        night_action="self_protect",
+        night_priority=20,
+        unique=True,
+    ),
+)
+
+
+# ============================================================
+# UMUMIY ROLLAR KATALOGI
+# ============================================================
 
 ROLES: dict[str, Role] = {
-    # KRON — 12 ta
-    "shoh": Role(
-        "shoh", "Shoh", Team.KRON,
-        "Tunda bir qobiliyatni to‘sadi va kuchli himoyaga ega.",
-        "block", "Soya tahdidlari yo‘q qilinib, Shoh tirik qolsa."
-    ),
-    "malika": Role(
-        "malika", "Malika", Team.KRON,
-        "Saroydagi ittifoqlarni boshqaradi.",
-        "influence", "KRON g‘alaba qilsa."
-    ),
-    "shahzoda": Role(
-        "shahzoda", "Shahzoda", Team.KRON,
-        "Shoh halok bo‘lganda vorislik huquqiga ega.",
-        "succession", "KRON g‘alaba qilsa."
-    ),
-    "vazir": Role(
-        "vazir", "Vazir", Team.KRON,
-        "Tanlangan o‘yinchini tekshiradi.",
-        "investigate", "KRON g‘alaba qilsa."
-    ),
-    "bosh_qomondon": Role(
-        "bosh_qomondon", "Bosh qo‘mondon", Team.KRON,
-        "Dushmanga hujum qiladi.",
-        "attack", "KRON g‘alaba qilsa."
-    ),
-    "qirol_qorovuli": Role(
-        "qirol_qorovuli", "Qirol qo‘riqchisi", Team.KRON,
-        "Tanlangan o‘yinchini himoya qiladi.",
-        "protect", "KRON g‘alaba qilsa."
-    ),
-    "qozi": Role(
-        "qozi", "Qozi", Team.KRON,
-        "Sud va ovoz berish bilan bog‘liq vakolatga ega.",
-        "judge", "KRON g‘alaba qilsa."
-    ),
-    "xazinachi": Role(
-        "xazinachi", "Xazinachi", Team.KRON,
-        "Xazina ma’lumotlarini tekshiradi.",
-        "inspect_treasury", "KRON g‘alaba qilsa."
-    ),
-    "ritsar": Role(
-        "ritsar", "Ritsar", Team.KRON,
-        "Tanlangan ittifoqchini qo‘riqlaydi.",
-        "guard", "KRON g‘alaba qilsa."
-    ),
-    "xizmatkor": Role(
-        "xizmatkor", "Xizmatkor", Team.KRON,
-        "Tungi faoliyatni kuzatadi.",
-        "observe", "KRON g‘alaba qilsa."
-    ),
-    "tinch_aholi": Role(
-        "tinch_aholi", "Tinch aholi", Team.KRON,
-        "Maxsus tungi qobiliyati yo‘q.",
-        None, "KRON g‘alaba qilsa.", passive=True
-    ),
-    "aygoqchi": Role(
-        "aygoqchi", "Ayg‘oqchi", Team.KRON,
-        "O‘yinchilarning tungi harakatlarini kuzatadi.",
-        "observe", "KRON g‘alaba qilsa."
-    ),
-
-    # SOYA — 10 ta
-    "soya_boshligi": Role(
-        "soya_boshligi", "Soya boshlig‘i", Team.SOYA,
-        "Soya jamoasining hujumini boshqaradi.",
-        "team_attack", "SOYA g‘alaba qilsa."
-    ),
-    "qotil": Role(
-        "qotil", "Qotil", Team.SOYA,
-        "Tanlangan nishonga hujum qiladi.",
-        "attack", "SOYA g‘alaba qilsa."
-    ),
-    "josus": Role(
-        "josus", "Josus", Team.SOYA,
-        "Raqiblarning harakatlarini kuzatadi.",
-        "observe", "SOYA g‘alaba qilsa."
-    ),
-    "soxta_maslahatchi": Role(
-        "soxta_maslahatchi", "Soxta maslahatchi", Team.SOYA,
-        "Tekshiruv natijalarini chalg‘itishga mo‘ljallangan.",
-        "mislead", "SOYA g‘alaba qilsa."
-    ),
-    "xoin": Role(
-        "xoin", "Xoin", Team.SOYA,
-        "Raqiblar faoliyatiga xalaqit beradi.",
-        "sabotage", "SOYA g‘alaba qilsa."
-    ),
-    "qora_vazir": Role(
-        "qora_vazir", "Qora vazir", Team.SOYA,
-        "Tanlangan o‘yinchining harakatini to‘sadi.",
-        "block", "SOYA g‘alaba qilsa."
-    ),
-    "dushman_qiroli": Role(
-        "dushman_qiroli", "Dushman qiroli", Team.SOYA,
-        "Soya jamoasining strategiyasini boshqaradi.",
-        "team_attack", "SOYA g‘alaba qilsa."
-    ),
-    "dushman_qomondoni": Role(
-        "dushman_qomondoni", "Dushman qo‘mondoni", Team.SOYA,
-        "Tanlangan nishonga hujum qiladi.",
-        "attack", "SOYA g‘alaba qilsa."
-    ),
-    "dushman_josusi": Role(
-        "dushman_josusi", "Dushman josusi", Team.SOYA,
-        "O‘yinchining jamoasini aniqlaydi.",
-        "investigate", "SOYA g‘alaba qilsa."
-    ),
-    "dushman_suiqasdchisi": Role(
-        "dushman_suiqasdchisi", "Dushman suiqasdchisi", Team.SOYA,
-        "Himoyani chetlab o‘tuvchi hujum qiladi.",
-        "hidden_attack", "SOYA g‘alaba qilsa."
-    ),
-
-    # ISYON — 10 ta
-    "isyon_boshligi": Role(
-        "isyon_boshligi", "Isyon boshlig‘i", Team.ISYON,
-        "Isyonchilar hujumini boshqaradi.",
-        "team_attack", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "isyonchi": Role(
-        "isyonchi", "Isyonchi", Team.ISYON,
-        "Tanlangan nishonga hujum qiladi.",
-        "attack", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "fitnachi": Role(
-        "fitnachi", "Fitnachi", Team.ISYON,
-        "Raqiblar rejasini buzadi.",
-        "sabotage", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "sobiq_general": Role(
-        "sobiq_general", "Sobiq general", Team.ISYON,
-        "Harbiy tajribasi orqali hujum qiladi.",
-        "attack", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "qora_bozorchi": Role(
-        "qora_bozorchi", "Qora bozorchi", Team.ISYON,
-        "Nishondan resurs o‘g‘irlashga urinadi.",
-        "steal_gold", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "isyon_josusi": Role(
-        "isyon_josusi", "Isyon josusi", Team.ISYON,
-        "Tanlangan o‘yinchini tekshiradi.",
-        "investigate", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "sabotajchi": Role(
-        "sabotajchi", "Sabotajchi", Team.ISYON,
-        "Raqiblar faoliyatiga xalaqit beradi.",
-        "sabotage", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "isyon_qorovuli": Role(
-        "isyon_qorovuli", "Isyon qorovuli", Team.ISYON,
-        "Tanlangan o‘yinchini qo‘riqlaydi.",
-        "guard", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "targibotchi": Role(
-        "targibotchi", "Targ‘ibotchi", Team.ISYON,
-        "Ovoz va ta’sir bilan bog‘liq qobiliyatga ega.",
-        "influence", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-    "qochqin": Role(
-        "qochqin", "Qochqin", Team.ISYON,
-        "Omon qolishga urinadi.",
-        "survive", "Isyonchilar maxsus g‘alaba shartini bajarsa."
-    ),
-
-    # MUSTAQIL — 4 ta
-    "ovchi": Role(
-        "ovchi", "Ovchi", Team.MUSTAQIL,
-        "Shaxsiy nishonini ovlaydi.",
-        "contract_attack", "Shaxsiy ov maqsadini bajarsa."
-    ),
-    "telba": Role(
-        "telba", "Telba", Team.MUSTAQIL,
-        "Ovoz berishda o‘yindan chiqarilsa, g‘alaba qiladi.",
-        None, "Ovoz berish orqali chiqarilsa.", passive=True
-    ),
-    "yollanma_jangchi": Role(
-        "yollanma_jangchi", "Yollanma jangchi", Team.MUSTAQIL,
-        "Shartnoma asosida nishonga hujum qiladi.",
-        "contract_attack", "Shartnomasini bajarsa."
-    ),
-    "taxt_davogari": Role(
-        "taxt_davogari", "Taxt da’vogari", Team.MUSTAQIL,
-        "Taxtni egallash uchun kurashadi.",
-        "claim_throne", "Shaxsiy taxt maqsadini bajarsa."
-    ),
+    role.id: role for role in _ROLE_LIST
 }
 
+ROLE_COUNTS: dict[Team, int] = {
+    team: sum(1 for role in _ROLE_LIST if role.team == team)
+    for team in Team
+}
 
-def get_all_roles() -> list[Role]:
-    return list(ROLES.values())
+TOTAL_ROLES = len(ROLES)
 
 
 def get_role(role_id: str) -> Role | None:
+    """Rol ID si bo‘yicha rolni qaytaradi."""
     return ROLES.get(role_id)
 
 
-def get_roles_by_team(team: Team) -> list[Role]:
-    return [role for role in ROLES.values() if role.team == team]
+def roles_for_team(team: Team | str) -> tuple[Role, ...]:
+    """Berilgan jamoaga tegishli rollarni qaytaradi."""
+    normalized_team = Team(team)
+    return tuple(
+        role for role in _ROLE_LIST
+        if role.team == normalized_team
+    )
 
 
-def get_active_roles() -> list[Role]:
-    return [role for role in ROLES.values() if role.action is not None]
+def get_role_names() -> dict[str, str]:
+    """Rol ID va ko‘rinadigan nomlar lug‘atini qaytaradi."""
+    return {
+        role.id: role.name
+        for role in _ROLE_LIST
+    }
 
 
-def validate_roles() -> None:
-    expected = {
+def validate_role_catalog() -> None:
+    """Dastur ishga tushishida rol katalogini tekshirish uchun."""
+    if TOTAL_ROLES != 36:
+        raise ValueError(
+            f"THRONE katalogida 36 ta rol bo‘lishi kerak. "
+            f"Hozir: {TOTAL_ROLES}"
+        )
+
+    expected_counts = {
         Team.KRON: 12,
         Team.SOYA: 10,
         Team.ISYON: 10,
         Team.MUSTAQIL: 4,
     }
 
-    if len(ROLES) != 36:
+    if ROLE_COUNTS != expected_counts:
         raise ValueError(
-            f"36 ta rol kerak; topildi: {len(ROLES)}"
+            f"Jamoalar soni noto‘g‘ri: {ROLE_COUNTS}"
         )
 
-    if len(set(ROLES)) != len(ROLES):
-        raise ValueError("Takrorlangan rol ID mavjud.")
-
-    for team, count in expected.items():
-        actual = len(get_roles_by_team(team))
-        if actual != count:
-            raise ValueError(
-                f"{team.value}: {count} ta rol kerak; topildi: {actual}"
-            )
+    ids = [role.id for role in _ROLE_LIST]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Rollar orasida takrorlangan ID mavjud.")
 
 
-validate_roles()
+# Import qilinganda katalogni darhol tekshiramiz.
+validate_role_catalog()
