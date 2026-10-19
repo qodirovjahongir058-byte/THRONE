@@ -1,202 +1,277 @@
-from dataclasses import dataclass
+
+from datetime import datetime, timezone
 
 from game_engine import Game, GamePhase
-from game_resolver import GameResolver, NightResolution
-from game_voting import GameVoting, VotingResult
-from game_victory import GameVictory, VictoryResult
+from game_resolver import GameResolver
+from game_victory import GameVictory
 
 
-@dataclass(frozen=True, slots=True)
-class FlowResult:
-    success: bool
-    message: str
-    phase: GamePhase
-    night_result: NightResolution | None = None
-    voting_result: VotingResult | None = None
-    victory_result: VictoryResult | None = None
+LAST_WORDS_DURATION = 30
 
 
 class GameFlow:
-    """THRONE o'yinining bosqichlarini boshqaradi."""
+    """THRONE o'yin bosqichlarini boshqarish."""
 
-    LAST_WORDS_DURATION = 30
-
-    def __init__(self, game: Game) -> None:
+    def __init__(self, game: Game):
         self.game = game
-        self.voting = GameVoting()
-        self.pending_last_words_player_id: int | None = None
+        self.last_words_player_id: int | None = None
+        self.last_words_deadline: float | None = None
 
-    def start(self, requester_is_admin: bool) -> FlowResult:
-        success, message = self.game.start(requester_is_admin)
+    def _set_phase(self, phase: GamePhase) -> None:
+        self.game.phase = phase
+        self.game.phase_started_at = datetime.now(timezone.utc)
 
-        return FlowResult(
-            success=success,
-            message=message,
-            phase=self.game.phase,
-        )
+    def _alive_players(self):
+        return [
+            player
+            for player in self.game.players.values()
+            if player.alive
+        ]
 
-    def assign_roles_and_begin_night(self) -> FlowResult:
-        if self.game.phase != GamePhase.ROLE_REVEAL:
-            return self._result(False, "Rollarni taqsimlash bosqichi emas.")
+    def _check_victory(self):
+        winner = GameVictory.check_victory(self.game)
 
-        if not self.game.all_roles_assigned():
-            return self._result(False, "Hali barcha rollar biriktirilmagan.")
+        if winner:
+            self.game.finish(winner)
+            self._set_phase(GamePhase.FINISHED)
 
-        success, message = self.game.begin_night()
-        return self._result(success, message)
+        return winner
 
-    def resolve_night(self) -> FlowResult:
+    def start_night(self) -> bool:
+        if self.game.phase not in {
+            GamePhase.ROLE_REVEAL,
+            GamePhase.DAY,
+            GamePhase.DISCUSSION,
+        }:
+            return False
+
+        if self._check_victory():
+            return False
+
+        self.game.votes.clear()
+        self._set_phase(GamePhase.NIGHT)
+        return True
+
+    def resolve_night(self):
+        if self.game.phase != GamePhase.NIGHT:
+            return None
+
         result = GameResolver.resolve_night(self.game)
 
         if not result.success:
-            return self._result(False, "; ".join(result.messages))
+            return result
 
-        victory = GameVictory.check_victory(self.game)
+        winner = self._check_victory()
 
-        if victory.finished:
-            return FlowResult(
-                True,
-                victory.message,
-                self.game.phase,
-                night_result=result,
-                victory_result=victory,
-            )
+        if winner:
+            return result
 
-        success, message = self.game.begin_day()
+        self._set_phase(GamePhase.DAY)
+        return result
 
-        return FlowResult(
-            success,
-            message,
-            self.game.phase,
-            night_result=result,
-        )
+    def start_discussion(self) -> bool:
+        if self.game.phase != GamePhase.DAY:
+            return False
 
-    def begin_discussion(self) -> FlowResult:
-        success, message = self.game.begin_discussion()
-        return self._result(success, message)
+        if self._check_victory():
+            return False
 
-    def begin_voting(self) -> FlowResult:
-        success, message = self.voting.start_voting(self.game)
-        return self._result(success, message)
+        self._set_phase(GamePhase.DISCUSSION)
+        return True
 
-    def cast_vote(
+    def start_voting(self) -> bool:
+        if self.game.phase not in {
+            GamePhase.DAY,
+            GamePhase.DISCUSSION,
+        }:
+            return False
+
+        if self._check_victory():
+            return False
+
+        self.game.votes.clear()
+
+        for player in self.game.players.values():
+            player.vote_target = None
+
+        self._set_phase(GamePhase.VOTING)
+        return True
+
+    def register_vote(
         self,
         voter_id: int,
-        target_id: int,
-    ) -> FlowResult:
-        success, message = self.voting.cast_vote(
-            self.game,
-            voter_id,
-            target_id,
+        target_id: int | None,
+    ) -> tuple[bool, str]:
+        if self.game.phase != GamePhase.VOTING:
+            return False, "Hozir ovoz berish bosqichi emas."
+
+        voter = self.game.players.get(voter_id)
+
+        if voter is None or not voter.alive:
+            return False, "Siz ovoz bera olmaysiz."
+
+        if target_id == voter_id:
+            return False, "O'zingizga ovoz bera olmaysiz."
+
+        if target_id is not None:
+            target = self.game.players.get(target_id)
+
+            if target is None or not target.alive:
+                return False, "Tanlangan o'yinchi faol emas."
+
+        self.game.votes[voter_id] = target_id
+        voter.vote_target = target_id
+
+        return True, "Ovozingiz qabul qilindi."
+
+    def resolve_voting(self) -> dict:
+        if self.game.phase != GamePhase.VOTING:
+            return {
+                "success": False,
+                "message": "Hozir ovoz berish bosqichi emas.",
+                "eliminated": None,
+                "tie": False,
+            }
+
+        alive_ids = {
+            player.user_id
+            for player in self._alive_players()
+        }
+
+        vote_counts: dict[int, int] = {}
+
+        for voter_id, target_id in self.game.votes.items():
+            if voter_id not in alive_ids:
+                continue
+
+            if target_id is None or target_id not in alive_ids:
+                continue
+
+            vote_counts[target_id] = (
+                vote_counts.get(target_id, 0) + 1
+            )
+
+        if not vote_counts:
+            self.game.history.append(
+                f"{self.game.round_number}-raund: "
+                "ovoz berish natijasida hech kim chiqarilmadi."
+            )
+            self._set_phase(GamePhase.NIGHT)
+
+            return {
+                "success": True,
+                "message": "Ovoz berish yakunlandi. Hech kim chiqarilmadi.",
+                "eliminated": None,
+                "tie": False,
+            }
+
+        highest_votes = max(vote_counts.values())
+
+        leaders = [
+            player_id
+            for player_id, count in vote_counts.items()
+            if count == highest_votes
+        ]
+
+        if len(leaders) > 1:
+            self.game.history.append(
+                f"{self.game.round_number}-raund: "
+                "ovozlar teng bo'ldi."
+            )
+
+            return {
+                "success": True,
+                "message": (
+                    "Ovozlar teng. Qayta ovoz berish kerak."
+                ),
+                "eliminated": None,
+                "tie": True,
+            }
+
+        target_id = leaders[0]
+        target = self.game.players.get(target_id)
+
+        if target is None or not target.alive:
+            return {
+                "success": False,
+                "message": "Ovoz natijasi bo'yicha nishon topilmadi.",
+                "eliminated": None,
+                "tie": False,
+            }
+
+        self.last_words_player_id = target_id
+        self._set_phase(GamePhase.LAST_WORDS)
+
+        self.game.history.append(
+            f"{target.name} ovoz berish orqali "
+            "so'nggi so'z bosqichiga o'tdi."
         )
-        return self._result(success, message)
 
-    def resolve_voting(self) -> FlowResult:
-        result = self.voting.resolve_voting(self.game)
+        return {
+            "success": True,
+            "message": (
+                f"{target.name} so'nggi so'zini aytishi mumkin."
+            ),
+            "eliminated": target_id,
+            "tie": False,
+            "last_words_seconds": LAST_WORDS_DURATION,
+        }
 
-        if not result.success:
-            return FlowResult(
-                False,
-                result.message,
-                self.game.phase,
-                voting_result=result,
-            )
-
-        if result.revote_required:
-            return FlowResult(
-                True,
-                result.message,
-                self.game.phase,
-                voting_result=result,
-            )
-
-        if result.eliminated_id is not None:
-            self.pending_last_words_player_id = result.eliminated_id
-            self.game.phase = GamePhase.LAST_WORDS
-            self.game.phase_started_at = __import__("time").time()
-
-            return FlowResult(
-                True,
-                result.message + " Oxirgi so'z bosqichi boshlandi.",
-                self.game.phase,
-                voting_result=result,
-            )
-
-        victory = GameVictory.check_victory(self.game)
-
-        if victory.finished:
-            return FlowResult(
-                True,
-                victory.message,
-                self.game.phase,
-                voting_result=result,
-                victory_result=victory,
-            )
-
-        success, message = self.game.begin_night()
-
-        return FlowResult(
-            success,
-            message,
-            self.game.phase,
-            voting_result=result,
-        )
-
-    def save_last_words(
-        self,
-        player_id: int,
-        message: str,
-    ) -> FlowResult:
-        if player_id != self.pending_last_words_player_id:
-            return self._result(
-                False,
-                "Hozir oxirgi so'z navbati sizda emas.",
-            )
-
-        success, response = self.game.save_last_words(player_id, message)
-
-        if success:
-            self.pending_last_words_player_id = None
-
-        return self._result(success, response)
-
-    def finish_last_words(self) -> FlowResult:
+    def finish_last_words(self) -> dict:
         if self.game.phase != GamePhase.LAST_WORDS:
-            return self._result(False, "Oxirgi so'z bosqichi faol emas.")
+            return {
+                "success": False,
+                "message": "Hozir so'nggi so'z bosqichi emas.",
+                "eliminated": None,
+            }
 
-        if self.pending_last_words_player_id is not None:
-            player = self.game.players.get(
-                self.pending_last_words_player_id
-            )
-            if player is not None and player.last_words is None:
-                player.last_words = "Oxirgi so'z aytilmadi."
+        target_id = self.last_words_player_id
+        target = self.game.players.get(target_id) if target_id else None
 
-        self.pending_last_words_player_id = None
+        eliminated_id = None
 
-        victory = GameVictory.check_victory(self.game)
-
-        if victory.finished:
-            return FlowResult(
-                True,
-                victory.message,
-                self.game.phase,
-                victory_result=victory,
+        if target is not None and target.alive:
+            success, _message = self.game.eliminate_player(
+                target.user_id,
+                reason="Ovoz berish natijasida",
             )
 
-        success, message = self.game.begin_night()
-        return self._result(success, message)
+            if success:
+                eliminated_id = target.user_id
 
-    def stop(self, requester_is_admin: bool) -> FlowResult:
-        success, message = self.game.stop(requester_is_admin)
-        return self._result(success, message)
+        self.last_words_player_id = None
+        self.last_words_deadline = None
 
-    def _result(self, success: bool, message: str) -> FlowResult:
-        return FlowResult(
-            success=success,
-            message=message,
-            phase=self.game.phase,
-        )
+        winner = self._check_victory()
 
+        if not winner:
+            self.game.round_number += 1
+            self._set_phase(GamePhase.NIGHT)
 
-def create_game_flow(game: Game) -> GameFlow:
-    return GameFlow(game)
+        return {
+            "success": True,
+            "message": (
+                "O'yin yakunlandi."
+                if winner
+                else "So'nggi so'z bosqichi tugadi. Tun boshlandi."
+            ),
+            "eliminated": eliminated_id,
+            "winner": winner,
+        }
+
+    def stop_game(self, reason: str = "O'yin to'xtatildi.") -> bool:
+        if self.game.phase in {
+            GamePhase.FINISHED,
+            GamePhase.STOPPED,
+        }:
+            return False
+
+        self.game.night_actions.clear()
+        self.game.votes.clear()
+        self.game.winner = None
+
+        self._set_phase(GamePhase.STOPPED)
+        self.game.history.append(reason)
+
+        return True
+        
