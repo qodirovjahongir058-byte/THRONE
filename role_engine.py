@@ -1,180 +1,192 @@
+
 from __future__ import annotations
 
-from dataclasses import dataclass
+import secrets
+from collections import Counter
 
-from game_actions import ActionType
-from game_engine import GameState, PlayerState
-from roles import RoleAbilityType, RoleDefinition, RoleSide, get_role
-
-
-@dataclass(frozen=True, slots=True)
-class RoleActionRule:
-    """Defines what a role can do during the night."""
-
-    action_type: ActionType
-    requires_target: bool = True
-    uses_per_game: int | None = None
+from game_state import GamePhase, GameState
+from roles import ROLES, Team, Role, validate_role_catalog
 
 
-@dataclass(frozen=True, slots=True)
-class RoleRuntimeInfo:
-    """Runtime information about one player's role."""
-
-    role: RoleDefinition
-    action_rules: tuple[RoleActionRule, ...]
+MIN_PLAYERS = 7
+MAX_PLAYERS = 50
 
 
-def get_player_role(
-    player: PlayerState,
-) -> RoleDefinition | None:
-    """Return the role definition assigned to a player."""
-
-    if not player.role_key:
-        return None
-
-    return get_role(player.role_key)
+class RoleAssignmentError(Exception):
+    """Rol taqsimlashdagi xato."""
 
 
-def get_role_side(
-    player: PlayerState,
-) -> RoleSide | None:
-    """Return the faction of a player's role."""
+def get_team_distribution(player_count: int) -> dict[Team, int]:
+    """O'yinchilar soniga mos jamoa tarkibini hisoblaydi."""
+    if not MIN_PLAYERS <= player_count <= MAX_PLAYERS:
+        raise RoleAssignmentError(
+            f"O'yinchilar soni {MIN_PLAYERS}–{MAX_PLAYERS} oralig'ida bo'lishi kerak."
+        )
 
-    role = get_player_role(player)
+    independent_count = min(4, max(1, player_count // 8))
+    soya_count = max(2, round(player_count * 0.22))
+    isyon_count = max(2, round(player_count * 0.20))
+    kron_count = player_count - independent_count - soya_count - isyon_count
 
-    if role is None:
-        return None
+    if kron_count < 1:
+        raise RoleAssignmentError("Jamoalar tarkibini hisoblab bo'lmadi.")
 
-    return role.side
+    return {
+        Team.KRON: kron_count,
+        Team.SOYA: soya_count,
+        Team.ISYON: isyon_count,
+        Team.MUSTAQIL: independent_count,
+    }
 
 
-def build_role_runtime_info(
-    player: PlayerState,
-) -> RoleRuntimeInfo | None:
-    """Build runtime information for a player's current role."""
+def _choose_team_roles(team: Team, count: int) -> list[Role]:
+    """Jamoaga mos, takrorlanmaydigan rollarni tanlaydi."""
+    pool = [role for role in ROLES.values() if role.team == team]
 
-    role = get_player_role(player)
+    if count > len(pool):
+        raise RoleAssignmentError(
+            f"{team.value} jamoasiga {count} ta rol kerak, "
+            f"ammo katalogda {len(pool)} ta rol mavjud."
+        )
 
-    if role is None:
-        return None
+    rng = secrets.SystemRandom()
+    rng.shuffle(pool)
 
-    rules = _build_action_rules(role)
+    leader_ids = {
+        Team.KRON: "shoh",
+        Team.SOYA: "soya_hukmdori",
+        Team.ISYON: "isyon_boshligi",
+        Team.MUSTAQIL: None,
+    }
+    leader_id = leader_ids[team]
 
-    return RoleRuntimeInfo(
-        role=role,
-        action_rules=rules,
+    selected: list[Role] = []
+
+    if leader_id and count > 0:
+        leader = ROLES[leader_id]
+        selected.append(leader)
+        pool.remove(leader)
+
+    remaining = count - len(selected)
+    selected.extend(pool[:remaining])
+    rng.shuffle(selected)
+
+    return selected
+
+
+def assign_roles(game: GameState) -> dict[int, Role]:
+    """
+    Har bir o'yinchiga o'z jamoasiga tegishli rol beradi.
+
+    Faqat LOBBY bosqichida ishlaydi.
+    Barcha tekshiruvlar muvaffaqiyatli o'tgach, rollar biriktiriladi.
+    """
+    validate_role_catalog()
+
+    if game.phase != GamePhase.LOBBY:
+        raise RoleAssignmentError(
+            "Rollar faqat LOBBY bosqichida taqsimlanadi."
+        )
+
+    player_count = game.player_count
+    if not MIN_PLAYERS <= player_count <= MAX_PLAYERS:
+        raise RoleAssignmentError(
+            f"O'yinni boshlash uchun {MIN_PLAYERS}–{MAX_PLAYERS} "
+            "nafar o'yinchi kerak."
+        )
+
+    distribution = get_team_distribution(player_count)
+    players = list(game.players.values())
+    rng = secrets.SystemRandom()
+    rng.shuffle(players)
+
+    # Avval barcha rollarni jamoalar kesimida tayyorlaymiz.
+    roles_by_team: dict[Team, list[Role]] = {
+        team: _choose_team_roles(team, count)
+        for team, count in distribution.items()
+    }
+
+    # Har bir jamoaga alohida o'yinchilar va rollar ajratiladi.
+    assignments: list[tuple[int, str]] = []
+    player_index = 0
+
+    for team, count in distribution.items():
+        team_players = players[player_index:player_index + count]
+        player_index += count
+
+        team_roles = roles_by_team[team]
+        rng.shuffle(team_roles)
+
+        if len(team_players) != len(team_roles):
+            raise RoleAssignmentError(
+                f"{team.value} jamoasida o'yinchi va rol soni mos emas."
+            )
+
+        for player, role in zip(team_players, team_roles):
+            if role.team != team:
+                raise RoleAssignmentError(
+                    f"{role.id} roli noto'g'ri jamoaga ajratilmoqda."
+                )
+            assignments.append((player.user_id, role.id))
+
+    if len(assignments) != player_count:
+        raise RoleAssignmentError("Barcha o'yinchilarga rol ajratilmadi.")
+
+    assigned_ids = [user_id for user_id, _ in assignments]
+    if len(assigned_ids) != len(set(assigned_ids)):
+        raise RoleAssignmentError("Bir o'yinchiga bir nechta rol ajratildi.")
+
+    # Tekshiruvlardan keyingina haqiqiy o'yinchi holatini o'zgartiramiz.
+    for user_id, role_id in assignments:
+        game.players[user_id].assign_role(role_id)
+
+    actual_teams = Counter(
+        player.team for player in game.players.values()
     )
 
+    for team, expected_count in distribution.items():
+        if actual_teams[team] != expected_count:
+            raise RoleAssignmentError(
+                f"{team.value}: kutilgan {expected_count}, "
+                f"amalda {actual_teams[team]}."
+            )
 
-def can_use_action(
-    game: GameState,
-    actor_id: int,
-    action_type: ActionType,
-) -> bool:
-    """Check whether a player can currently use an action."""
+    game.metadata["role_distribution"] = {
+        team.value: count for team, count in distribution.items()
+    }
+    game.metadata["roles_assigned"] = True
 
-    player = game.get_player(actor_id)
-
-    if player is None:
-        return False
-
-    if not player.alive:
-        return False
-
-    if player.blocked:
-        return False
-
-    runtime_info = build_role_runtime_info(player)
-
-    if runtime_info is None:
-        return False
-
-    return any(
-        rule.action_type == action_type
-        for rule in runtime_info.action_rules
-    )
+    return {
+        player.user_id: player.role
+        for player in game.players.values()
+        if player.role is not None
+    }
 
 
-def action_requires_target(
-    game: GameState,
-    actor_id: int,
-    action_type: ActionType,
-) -> bool:
-    """Check whether the selected action requires a target."""
+def get_role_distribution(game: GameState) -> dict[str, int]:
+    """Taqsimlangan jamoalar sonini qaytaradi."""
+    counts: Counter[str] = Counter()
 
-    player = game.get_player(actor_id)
+    for player in game.players.values():
+        if player.team is not None:
+            counts[player.team.value] += 1
 
-    if player is None:
-        return False
-
-    runtime_info = build_role_runtime_info(player)
-
-    if runtime_info is None:
-        return False
-
-    for rule in runtime_info.action_rules:
-        if rule.action_type == action_type:
-            return rule.requires_target
-
-    return False
+    return dict(counts)
 
 
-def _build_action_rules(
-    role: RoleDefinition,
-) -> tuple[RoleActionRule, ...]:
-    """Create the basic action rules for a role."""
-
-    ability_type = role.ability_type
-
-    if ability_type == RoleAbilityType.INFORMATION:
-        return (
-            RoleActionRule(
-                action_type=ActionType.OBSERVE,
-                requires_target=True,
-            ),
+def clear_roles(game: GameState) -> None:
+    """Lobbyda rollarni qayta taqsimlash uchun tozalaydi."""
+    if game.phase != GamePhase.LOBBY:
+        raise RoleAssignmentError(
+            "Rollarni faqat LOBBY bosqichida tozalash mumkin."
         )
 
-    if ability_type == RoleAbilityType.PROTECTION:
-        return (
-            RoleActionRule(
-                action_type=ActionType.PROTECT,
-                requires_target=True,
-            ),
-        )
+    for player in game.players.values():
+        player.role_id = None
+        player.team = None
+        player.ability_uses.clear()
+        player.ability_data.clear()
 
-    if ability_type == RoleAbilityType.CONTROL:
-        return (
-            RoleActionRule(
-                action_type=ActionType.BLOCK,
-                requires_target=True,
-            ),
-        )
-
-    if ability_type == RoleAbilityType.ATTACK:
-        return (
-            RoleActionRule(
-                action_type=ActionType.ATTACK,
-                requires_target=True,
-            ),
-        )
-
-    if ability_type == RoleAbilityType.ECONOMY:
-        return (
-            RoleActionRule(
-                action_type=ActionType.SPECIAL,
-                requires_target=False,
-            ),
-        )
-
-    if ability_type == RoleAbilityType.SPECIAL:
-        return (
-            RoleActionRule(
-                action_type=ActionType.SPECIAL,
-                requires_target=True,
-            ),
-        )
-
-    if ability_type == RoleAbilityType.PASSIVE:
-        return ()
-
-    return ()
+    game.metadata.pop("role_distribution", None)
+    game.metadata.pop("roles_assigned", None)
+    
