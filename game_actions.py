@@ -71,86 +71,95 @@ class GameActionManager:
     ) -> ActionResult:
         if game.phase != GamePhase.NIGHT:
             return ActionResult(
-                success=False,
-                message="Harakatni faqat tun bosqichida bajarish mumkin.",
+                False,
+                "Harakatni faqat tun bosqichida bajarish mumkin.",
             )
 
         actor = game.players.get(actor_id)
+
         if actor is None:
             return ActionResult(
-                success=False,
-                message="Siz ushbu o'yin ishtirokchisi emassiz.",
+                False,
+                "Siz ushbu o'yin ishtirokchisi emassiz.",
             )
 
         if not actor.alive:
             return ActionResult(
-                success=False,
-                message="Eliminatsiya qilingan o'yinchi harakat qila olmaydi.",
+                False,
+                "O'yindan chiqqan o'yinchi harakat qila olmaydi.",
             )
 
         if action_type not in ALLOWED_ACTIONS:
             return ActionResult(
-                success=False,
-                message="Noma'lum harakat turi.",
+                False,
+                "Noma'lum harakat turi.",
             )
 
-        role = get_role(actor.role_id)
+        role = get_role(actor.role_id or "")
+
         if role is None:
             return ActionResult(
-                success=False,
-                message="Rolingiz aniqlanmadi.",
+                False,
+                "Rolingiz aniqlanmadi.",
             )
 
         if role.action != action_type:
             return ActionResult(
-                success=False,
-                message="Bu harakat sizning rolingizga mos kelmaydi.",
+                False,
+                "Bu harakat sizning rolingizga mos kelmaydi.",
             )
 
         if action_type not in NON_TARGET_ACTIONS:
             if target_id is None:
                 return ActionResult(
-                    success=False,
-                    message="Nishonni tanlang.",
+                    False,
+                    "Nishonni tanlang.",
                 )
 
             target = game.players.get(target_id)
+
             if target is None:
                 return ActionResult(
-                    success=False,
-                    message="Tanlangan o'yinchi ushbu o'yinda yo'q.",
+                    False,
+                    "Tanlangan o'yinchi ushbu o'yinda yo'q.",
                 )
 
             if not target.alive:
                 return ActionResult(
-                    success=False,
-                    message="Eliminatsiya qilingan o'yinchini nishon qilib bo'lmaydi.",
+                    False,
+                    "O'yindan chiqqan o'yinchini nishon qilib bo'lmaydi.",
                 )
 
             if action_type in ATTACK_ACTIONS and target_id == actor_id:
                 return ActionResult(
-                    success=False,
-                    message="O'zingizni nishon qilib tanlay olmaysiz.",
+                    False,
+                    "O'zingizga hujum qila olmaysiz.",
                 )
 
+        # action_type — resolver uchun.
+        # action — eski modullar bilan moslik uchun saqlanadi.
         action = {
             "actor_id": actor_id,
+            "action_type": action_type,
             "action": action_type,
             "target_id": target_id,
             **kwargs,
         }
 
+        # Har bir o'yinchi bir tunda faqat bitta faol
+        # harakatga ega bo'ladi. Qayta tanlasa, avvalgisi yangilanadi.
         game.night_actions = [
             old_action
             for old_action in game.night_actions
             if old_action.get("actor_id") != actor_id
         ]
+
         game.night_actions.append(action)
         actor.night_action = action_type
 
         return ActionResult(
-            success=True,
-            message="Harakatingiz qabul qilindi.",
+            True,
+            "Harakatingiz qabul qilindi.",
             action=action,
         )
 
@@ -162,6 +171,7 @@ class GameActionManager:
         for action in game.night_actions:
             if action.get("actor_id") == actor_id:
                 return action
+
         return None
 
     @staticmethod
@@ -172,18 +182,22 @@ class GameActionManager:
             player.night_action = None
 
     @staticmethod
-    def cancel_action(game: Game, actor_id: int) -> ActionResult:
+    def cancel_action(
+        game: Game,
+        actor_id: int,
+    ) -> ActionResult:
         if game.phase != GamePhase.NIGHT:
             return ActionResult(
-                success=False,
-                message="Harakatni faqat tun bosqichida bekor qilish mumkin.",
+                False,
+                "Harakatni faqat tun bosqichida bekor qilish mumkin.",
             )
 
         existing = GameActionManager.get_player_action(game, actor_id)
+
         if existing is None:
             return ActionResult(
-                success=False,
-                message="Bekor qilinadigan harakat topilmadi.",
+                False,
+                "Bekor qilinadigan harakat topilmadi.",
             )
 
         game.night_actions = [
@@ -193,11 +207,12 @@ class GameActionManager:
         ]
 
         player = game.players.get(actor_id)
+
         if player is not None:
             player.night_action = None
 
         return ActionResult(
-            success=True,
-            message="Harakatingiz bekor qilindi.",
-        )
+            True,
+            "Harakatingiz bekor qilindi.",
+)
         
