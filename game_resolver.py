@@ -16,7 +16,7 @@ class NightResolution:
 
 
 class GameResolver:
-    """THRONE tungi harakatlarining natijalarini hisoblaydi."""
+    """THRONE tungi harakatlarini yagona tartibda hal qiladi."""
 
     ATTACK_ACTIONS = {
         "attack",
@@ -50,6 +50,30 @@ class GameResolver:
 
     OBSERVE_ACTIONS = {"observe"}
 
+    @staticmethod
+    def _get_actor(game: Game, action: dict):
+        actor_id = action.get("actor_id")
+        actor = game.players.get(actor_id)
+
+        if actor is None or not actor.alive:
+            return None
+
+        return actor
+
+    @staticmethod
+    def _get_target(game: Game, action: dict):
+        target_id = action.get("target_id")
+
+        if target_id is None:
+            return None
+
+        target = game.players.get(target_id)
+
+        if target is None or not target.alive:
+            return None
+
+        return target
+
     @classmethod
     def resolve_night(cls, game: Game) -> NightResolution:
         if game.phase != GamePhase.NIGHT:
@@ -57,7 +81,7 @@ class GameResolver:
                 success=False,
                 messages=[
                     "Tungi harakatlarni faqat tun bosqichida "
-                    "yechish mumkin."
+                    "hal qilish mumkin."
                 ],
             )
 
@@ -68,31 +92,24 @@ class GameResolver:
         protected: set[int] = set()
         healed: set[int] = set()
         attacked: dict[int, list[dict]] = {}
-        investigation_results: dict[int, str] = {}
 
-        # 1. Bloklash va sabotaj.
+        # 1. Bloklash.
+        # Bloklangan o'yinchining boshqa tungi harakatlari
+        # bajarilmaydi.
         for action in actions:
             if action.get("action_type") not in cls.BLOCK_ACTIONS:
                 continue
 
-            target_id = action.get("target_id")
-            actor = game.players.get(action.get("actor_id"))
-            target = game.players.get(target_id)
+            actor = cls._get_actor(game, action)
+            target = cls._get_target(game, action)
 
-            if target_id is None:
+            if actor is None or target is None:
                 continue
 
-            if actor is None or not actor.alive:
-                continue
-
-            if target is None or not target.alive:
-                continue
-
-            blocked.add(target_id)
+            blocked.add(target.user_id)
 
         result.blocked = sorted(blocked)
 
-        # Bloklangan o'yinchilarning harakatlari bajarilmaydi.
         active_actions = [
             action
             for action in actions
@@ -102,119 +119,105 @@ class GameResolver:
         # 2. Himoya va davolash.
         for action in active_actions:
             action_type = action.get("action_type")
-            target_id = action.get("target_id")
 
-            if target_id is None:
+            if action_type not in (
+                cls.PROTECT_ACTIONS | cls.HEAL_ACTIONS
+            ):
                 continue
 
-            actor = game.players.get(action.get("actor_id"))
-            target = game.players.get(target_id)
+            actor = cls._get_actor(game, action)
+            target = cls._get_target(game, action)
 
-            if actor is None or not actor.alive:
-                continue
-
-            if target is None or not target.alive:
+            if actor is None or target is None:
                 continue
 
             if action_type in cls.PROTECT_ACTIONS:
-                protected.add(target_id)
+                protected.add(target.user_id)
 
             elif action_type in cls.HEAL_ACTIONS:
-                healed.add(target_id)
+                healed.add(target.user_id)
 
         result.healed = sorted(healed)
 
         # 3. Tekshiruv va kuzatuv.
         for action in active_actions:
             action_type = action.get("action_type")
-            target_id = action.get("target_id")
-            actor_id = action.get("actor_id")
 
-            if target_id is None:
+            if action_type not in (
+                cls.INVESTIGATE_ACTIONS | cls.OBSERVE_ACTIONS
+            ):
                 continue
 
-            actor = game.players.get(actor_id)
-            target = game.players.get(target_id)
+            actor = cls._get_actor(game, action)
+            target = cls._get_target(game, action)
 
-            if actor is None or not actor.alive:
-                continue
-
-            if target is None or not target.alive:
+            if actor is None or target is None:
                 continue
 
             if action_type in cls.INVESTIGATE_ACTIONS:
-                target_role = get_role(target.role_id or "")
+                role = get_role(target.role_id or "")
 
-                if target_role is not None:
-                    investigation_results[actor_id] = (
-                        f"{target.name} jamoasi: "
-                        f"{target_role.team.value}"
+                if role is not None:
+                    result.investigated[actor.user_id] = (
+                        f"{target.name} o'yinchisining jamoasi: "
+                        f"{role.team.value}"
                     )
 
             elif action_type in cls.OBSERVE_ACTIONS:
                 target_actions = [
-                    item
-                    for item in active_actions
-                    if item.get("target_id") == target_id
-                    and item.get("actor_id") != actor_id
+                    other
+                    for other in active_actions
+                    if other.get("target_id") == target.user_id
+                    and other.get("actor_id") != actor.user_id
+                    and other.get("action_type") not in cls.BLOCK_ACTIONS
                 ]
 
-                investigation_results[actor_id] = (
-                    f"{target.name}ga yo'naltirilgan "
+                result.investigated[actor.user_id] = (
+                    f"{target.name} o'yinchisiga yo'naltirilgan "
                     f"harakatlar soni: {len(target_actions)}"
                 )
 
-        result.investigated = investigation_results
-
-        # 4. Hujumlarni nishonlar bo'yicha yig'ish.
+        # 4. Hujumlarni yig'ish.
         for action in active_actions:
             if action.get("action_type") not in cls.ATTACK_ACTIONS:
                 continue
 
-            target_id = action.get("target_id")
+            actor = cls._get_actor(game, action)
+            target = cls._get_target(game, action)
 
-            if target_id is None:
+            if actor is None or target is None:
                 continue
 
-            actor = game.players.get(action.get("actor_id"))
-            target = game.players.get(target_id)
+            attacked.setdefault(target.user_id, []).append(action)
 
-            if actor is None or not actor.alive:
-                continue
-
-            if target is None or not target.alive:
-                continue
-
-            attacked.setdefault(target_id, []).append(action)
-
-        # 5. Hujum natijalarini hisoblash.
+        # 5. Hujum natijalari.
         for target_id, target_attacks in attacked.items():
             target = game.players.get(target_id)
 
             if target is None or not target.alive:
                 continue
 
-            bypass_attack = any(
+            bypass_protection = any(
                 action.get("action_type")
                 in cls.BYPASS_PROTECTION_ACTIONS
                 for action in target_attacks
             )
 
-            # Himoyani chetlab o'tuvchi hujumlar davolashni
-            # avtomatik ravishda chetlab o'tmaydi.
+            # Davolash oddiy va himoyani chetlab o'tuvchi
+            # hujumdan ham saqlaydi.
             if target_id in healed:
                 result.messages.append(
-                    f"{target.name} tabib yordami bilan omon qoldi."
+                    f"{target.name} davolash yordamida omon qoldi."
                 )
                 continue
 
-            if target_id in protected and not bypass_attack:
+            if target_id in protected and not bypass_protection:
                 result.messages.append(
                     f"{target.name} qo'riqchi tomonidan himoyalandi."
                 )
                 continue
 
-            success, _message = game.eliminate_player(
+            success, message = game.eliminate_player(
                 target_id,
                 reason="Tungi hujum natijasida",
             )
@@ -225,36 +228,10 @@ class GameResolver:
                     f"{target.name} tungi hujum natijasida "
                     "o'yindan chiqdi."
                 )
+            elif message:
+                result.messages.append(message)
 
-        # 6. Hozircha alohida mexanizmi yo'q maxsus amallar
-        # faqat qayd etiladi. Bu ularning to'liq ishlashini anglatmaydi.
-        recorded_actions = {
-            "trade",
-            "feed",
-            "steal_gold",
-            "influence",
-            "succession",
-            "inspect_treasury",
-            "claim_throne",
-            "visit",
-            "survive",
-            "mislead",
-            "judge",
-        }
-
-        for action in active_actions:
-            action_type = action.get("action_type")
-
-            if action_type in recorded_actions:
-                actor = game.players.get(action.get("actor_id"))
-
-                if actor is not None and actor.alive:
-                    result.messages.append(
-                        f"{actor.name} maxsus harakatni bajardi: "
-                        f"{action_type}."
-                    )
-
-        # 7. Tun yakuni.
+        # 6. Tun tarixini saqlash va harakatlarni tozalash.
         game.night_actions.clear()
 
         for player in game.players.values():
@@ -271,4 +248,4 @@ class GameResolver:
 def resolve_night(game: Game) -> NightResolution:
     """Tungi natijalarni hisoblash uchun tashqi funksiya."""
     return GameResolver.resolve_night(game)
-            
+        
