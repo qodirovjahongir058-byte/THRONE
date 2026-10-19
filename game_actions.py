@@ -1,218 +1,234 @@
 
-from dataclasses import dataclass, field
+from __future__ import annotations
+
+from dataclasses import dataclass
 from typing import Any
 
-from game_engine import Game, GamePhase
-from roles import get_role
+from game_state import GamePhase, GameState, PlayerState
+from roles import Team
 
 
-ATTACK_ACTIONS = {
-    "attack",
-    "team_attack",
-    "hidden_attack",
-    "contract_attack",
-    "attack_bypass",
+# ============================================================
+# THRONE — GAME ACTIONS
+# ============================================================
+
+
+class GameActionError(Exception):
+    """O'yin harakatlari bilan bog'liq xato."""
+
+
+@dataclass(frozen=True, slots=True)
+class GameAction:
+    game_id: str
+    actor_id: int
+    action_type: str
+    target_id: int | None = None
+    data: dict[str, Any] | None = None
+
+
+# Har bir rol uchun ruxsat etilgan harakatlar.
+ROLE_ACTIONS: dict[str, frozenset[str]] = {
+    "shoh": frozenset({"block"}),
+    "malika": frozenset({"inspect_defense"}),
+    "shahzoda": frozenset(),
+    "vazir": frozenset({"investigate"}),
+    "bosh_qomondon": frozenset({"protect"}),
+    "qirol_qoriqchisi": frozenset({"guard"}),
+    "qozi": frozenset({"investigate"}),
+    "xazinachi": frozenset(),
+    "ritsar": frozenset({"protect"}),
+    "xizmatkor": frozenset({"observe"}),
+    "tinch_aholi": frozenset(),
+    "aygoqchi": frozenset({"investigate_team"}),
+
+    "soya_hukmdori": frozenset({"team_attack"}),
+    "soya_qotili": frozenset({"team_attack"}),
+    "soya_josusi": frozenset({"investigate_team"}),
+    "zaharsoz": frozenset({"poison"}),
+    "soya_tabibi": frozenset({"protect_ally"}),
+    "qorongu_vazir": frozenset({"block"}),
+    "soya_ayg oqchisi": frozenset({"observe"}),
+    "soxta_maslahatchi": frozenset({"mislead"}),
+    "soya_jallodi": frozenset({"team_attack"}),
+    "soya_qorovuli": frozenset({"protect_ally"}),
+
+    "isyon_boshligi": frozenset({"rebellion_action"}),
+    "isyon_jangchisi": frozenset({"rebellion_attack"}),
+    "isyon josusi": frozenset({"investigate_team"}),
+    "fitnachi": frozenset({"block"}),
+    "isyon_tabibi": frozenset({"protect"}),
+    "isyon_mergan": frozenset({"rebellion_attack"}),
+    "isyon_qorovuli": frozenset({"protect_ally"}),
+    "isyon_usta": frozenset({"weaken"}),
+    "isyon_targibotchisi": frozenset(),
+    "yashirin_isyonchi": frozenset({"conceal"}),
+
+    "yollanma_qotil": frozenset({"solo_attack"}),
+    "soya_sayyohi": frozenset({"conceal"}),
+    "qasoskor": frozenset({"revenge"}),
+    "omon_qoluvchi": frozenset({"self_protect"}),
 }
 
 
-ALLOWED_ACTIONS = {
-    "attack",
-    "team_attack",
-    "protect",
-    "guard",
-    "heal",
-    "block",
-    "investigate",
-    "observe",
-    "hidden_attack",
-    "attack_bypass",
-    "shadow_mask",
-    "steal_gold",
-    "visit",
-    "memory_check",
-    "mislead",
-    "sabotage",
-    "influence",
-    "succession",
-    "inspect_treasury",
-    "contract_attack",
-    "claim_throne",
-    "feed",
-    "trade",
-    "survive",
-    "judge",
+TEAM_ACTIONS: dict[str, frozenset[Team]] = {
+    "team_attack": frozenset({Team.SOYA}),
+    "rebellion_attack": frozenset({Team.ISYON}),
+    "rebellion_action": frozenset({Team.ISYON}),
+    "solo_attack": frozenset({Team.MUSTAQIL}),
 }
 
 
-NON_TARGET_ACTIONS = {
-    "survive",
-    "succession",
-}
-
-
-@dataclass
-class ActionResult:
-    success: bool
-    message: str
-    action: dict[str, Any] | None = None
-    errors: list[str] = field(default_factory=list)
+SELF_TARGET_ACTIONS = frozenset({
+    "self_protect",
+    "conceal",
+})
 
 
 class GameActionManager:
-    """Tungi harakatlarni tekshiradi va o'yinga yozadi."""
+    """O'yin harakatlarini tekshirish va navbatga qo'yish."""
 
-    @staticmethod
     def submit_action(
-        game: Game,
+        self,
+        game: GameState,
         actor_id: int,
         action_type: str,
         target_id: int | None = None,
-        **kwargs: Any,
-    ) -> ActionResult:
+        data: dict[str, Any] | None = None,
+    ) -> GameAction:
+        """Harakatni tekshiradi va o'yin holatiga qo'shadi."""
+
         if game.phase != GamePhase.NIGHT:
-            return ActionResult(
-                False,
-                "Harakatni faqat tun bosqichida bajarish mumkin.",
+            raise GameActionError(
+                "Harakatlarni faqat tungi bosqichda yuborish mumkin."
             )
 
-        actor = game.players.get(actor_id)
+        actor = game.get_player(actor_id)
 
         if actor is None:
-            return ActionResult(
-                False,
-                "Siz ushbu o'yin ishtirokchisi emassiz.",
+            raise GameActionError("O'yinchi bu o'yinda qatnashmaydi.")
+
+        if not actor.is_alive:
+            raise GameActionError("O'lgan o'yinchi harakat qila olmaydi.")
+
+        if actor.role_id is None or actor.team is None:
+            raise GameActionError("O'yinchining roli hali belgilanmagan.")
+
+        allowed_actions = ROLE_ACTIONS.get(actor.role_id)
+
+        if allowed_actions is None:
+            raise GameActionError(
+                f"{actor.role_id} roli uchun harakatlar belgilanmagan."
             )
 
-        if not actor.alive:
-            return ActionResult(
-                False,
-                "O'yindan chiqqan o'yinchi harakat qila olmaydi.",
+        if action_type not in allowed_actions:
+            raise GameActionError(
+                "Bu rol tanlangan harakatdan foydalana olmaydi."
             )
 
-        if action_type not in ALLOWED_ACTIONS:
-            return ActionResult(
-                False,
-                "Noma'lum harakat turi.",
-            )
+        if target_id is None and action_type not in SELF_TARGET_ACTIONS:
+            raise GameActionError("Nishonni tanlash kerak.")
 
-        role = get_role(actor.role_id or "")
-
-        if role is None:
-            return ActionResult(
-                False,
-                "Rolingiz aniqlanmadi.",
-            )
-
-        if role.action != action_type:
-            return ActionResult(
-                False,
-                "Bu harakat sizning rolingizga mos kelmaydi.",
-            )
-
-        if action_type not in NON_TARGET_ACTIONS:
-            if target_id is None:
-                return ActionResult(
-                    False,
-                    "Nishonni tanlang.",
-                )
-
-            target = game.players.get(target_id)
+        if target_id is not None:
+            target = game.get_player(target_id)
 
             if target is None:
-                return ActionResult(
-                    False,
-                    "Tanlangan o'yinchi ushbu o'yinda yo'q.",
+                raise GameActionError("Tanlangan nishon bu o'yinda yo'q.")
+
+            if not target.is_alive:
+                raise GameActionError("O'lgan o'yinchini nishon qilib bo'lmaydi.")
+
+            if target_id == actor_id and action_type not in SELF_TARGET_ACTIONS:
+                raise GameActionError("Bu harakatda o'zingizni nishon qila olmaysiz.")
+
+        required_team = TEAM_ACTIONS.get(action_type)
+
+        if required_team is not None and actor.team not in required_team:
+            raise GameActionError(
+                "Bu jamoaviy harakatdan foydalanishga ruxsat yo'q."
+            )
+
+        # Har bir rol bir tunda shu turdagi harakatni bir marta yuboradi.
+        for existing in game.pending_actions:
+            if (
+                existing.get("actor_id") == actor_id
+                and existing.get("action_type") == action_type
+            ):
+                raise GameActionError(
+                    "Bu harakatni ushbu tunda allaqachon yuborgansiz."
                 )
 
-            if not target.alive:
-                return ActionResult(
-                    False,
-                    "O'yindan chiqqan o'yinchini nishon qilib bo'lmaydi.",
-                )
-
-            if action_type in ATTACK_ACTIONS and target_id == actor_id:
-                return ActionResult(
-                    False,
-                    "O'zingizga hujum qila olmaysiz.",
-                )
-
-        # action_type — resolver uchun.
-        # action — eski modullar bilan moslik uchun saqlanadi.
-        action = {
-            "actor_id": actor_id,
-            "action_type": action_type,
-            "action": action_type,
-            "target_id": target_id,
-            **kwargs,
-        }
-
-        # Har bir o'yinchi bir tunda faqat bitta faol
-        # harakatga ega bo'ladi. Qayta tanlasa, avvalgisi yangilanadi.
-        game.night_actions = [
-            old_action
-            for old_action in game.night_actions
-            if old_action.get("actor_id") != actor_id
-        ]
-
-        game.night_actions.append(action)
-        actor.night_action = action_type
-
-        return ActionResult(
-            True,
-            "Harakatingiz qabul qilindi.",
-            action=action,
+        action = GameAction(
+            game_id=game.game_id,
+            actor_id=actor_id,
+            action_type=action_type,
+            target_id=target_id,
+            data=dict(data or {}),
         )
 
-    @staticmethod
-    def get_player_action(
-        game: Game,
+        game.pending_actions.append({
+            "game_id": action.game_id,
+            "actor_id": action.actor_id,
+            "action_type": action.action_type,
+            "target_id": action.target_id,
+            "data": action.data,
+        })
+
+        return action
+
+    def get_player_actions(
+        self,
+        game: GameState,
         actor_id: int,
-    ) -> dict[str, Any] | None:
-        for action in game.night_actions:
-            if action.get("actor_id") == actor_id:
-                return action
-
-        return None
-
-    @staticmethod
-    def clear_actions(game: Game) -> None:
-        game.night_actions.clear()
-
-        for player in game.players.values():
-            player.night_action = None
-
-    @staticmethod
-    def cancel_action(
-        game: Game,
-        actor_id: int,
-    ) -> ActionResult:
-        if game.phase != GamePhase.NIGHT:
-            return ActionResult(
-                False,
-                "Harakatni faqat tun bosqichida bekor qilish mumkin.",
-            )
-
-        existing = GameActionManager.get_player_action(game, actor_id)
-
-        if existing is None:
-            return ActionResult(
-                False,
-                "Bekor qilinadigan harakat topilmadi.",
-            )
-
-        game.night_actions = [
+    ) -> list[dict[str, Any]]:
+        """O'yinchining joriy tunda yuborgan harakatlarini qaytaradi."""
+        return [
             action
-            for action in game.night_actions
-            if action.get("actor_id") != actor_id
+            for action in game.pending_actions
+            if action.get("actor_id") == actor_id
         ]
 
-        player = game.players.get(actor_id)
+    def cancel_action(
+        self,
+        game: GameState,
+        actor_id: int,
+        action_type: str | None = None,
+    ) -> bool:
+        """O'yinchi harakatini tunda bekor qilishga imkon beradi."""
+        if game.phase != GamePhase.NIGHT:
+            raise GameActionError(
+                "Harakatni faqat tungi bosqichda bekor qilish mumkin."
+            )
 
-        if player is not None:
-            player.night_action = None
+        for index, action in enumerate(game.pending_actions):
+            if action.get("actor_id") != actor_id:
+                continue
 
-        return ActionResult(
-            True,
-            "Harakatingiz bekor qilindi.",
+            if action_type is not None and action.get("action_type") != action_type:
+                continue
+
+            game.pending_actions.pop(index)
+            return True
+
+        return False
+
+    def clear_actions(self, game: GameState) -> None:
+        """Barcha tungi harakatlarni tozalaydi."""
+        game.pending_actions.clear()
+
+
+def submit_action(
+    game: GameState,
+    actor_id: int,
+    action_type: str,
+    target_id: int | None = None,
+    data: dict[str, Any] | None = None,
+) -> GameAction:
+    """Qulay funksional interfeys."""
+    return GameActionManager().submit_action(
+        game=game,
+        actor_id=actor_id,
+        action_type=action_type,
+        target_id=target_id,
+        data=data,
 )
-        
+            
