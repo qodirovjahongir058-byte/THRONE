@@ -1,107 +1,120 @@
 
+from __future__ import annotations
+
 from dataclasses import dataclass
 
-from game_engine import Game, GamePhase
-from roles import Team, get_role
+from game_state import GameEndReason, GamePhase, GameState
+from roles import Team
 
 
 @dataclass(frozen=True, slots=True)
 class VictoryResult:
     finished: bool
-    winner: str | None
-    message: str
+    winner: Team | str | None
+    reason: str
 
 
-class GameVictory:
-    """THRONE o'yinidagi jamoaviy g'alaba shartlari."""
+def check_victory(game: GameState) -> VictoryResult:
+    """O'yin holatiga qarab g'olibni aniqlaydi."""
 
-    @staticmethod
-    def check_victory(game: Game) -> VictoryResult:
-        if game.phase in (GamePhase.FINISHED, GamePhase.STOPPED):
-            return VictoryResult(
-                True,
-                game.winner,
-                "O'yin allaqachon yakunlangan.",
-            )
-
-        alive_players = game.alive_players
-
-        if not alive_players:
-            return GameVictory._finish(
-                game,
-                "DURANG",
-                "Barcha o'yinchilar o'yindan chiqdi. Natija — durang.",
-            )
-
-        team_counts = {
-            Team.KRON: 0,
-            Team.SOYA: 0,
-            Team.ISYON: 0,
-            Team.MUSTAQIL: 0,
-        }
-
-        for player in alive_players:
-            role = get_role(player.role_id or "")
-
-            if role is not None and role.team in team_counts:
-                team_counts[role.team] += 1
-
-        kron = team_counts[Team.KRON]
-        soya = team_counts[Team.SOYA]
-        isyon = team_counts[Team.ISYON]
-        mustaqil = team_counts[Team.MUSTAQIL]
-
-        # KRON: SOYA va ISYON tahdidlari qolmaganida.
-        if kron > 0 and soya == 0 and isyon == 0:
-            return GameVictory._finish(
-                game,
-                Team.KRON.value,
-                "KRON jamoasi g'alaba qozondi!",
-            )
-
-        # SOYA: qolgan jamoalardan tirik o'yinchilar soni
-        # bo'yicha ustunlikka erishganda.
-        if soya > 0 and soya >= kron + isyon + mustaqil:
-            return GameVictory._finish(
-                game,
-                Team.SOYA.value,
-                "SOYA jamoasi g'alaba qozondi!",
-            )
-
-        # ISYON: qolgan jamoalardan tirik o'yinchilar soni
-        # bo'yicha ustunlikka erishganda.
-        if isyon > 0 and isyon >= kron + soya + mustaqil:
-            return GameVictory._finish(
-                game,
-                Team.ISYON.value,
-                "ISYON jamoasi g'alaba qozondi!",
-            )
-
-        # MUSTAQIL rollarning shaxsiy maqsadlari alohida
-        # tekshirilishi kerak. Ularni faqat tirik qolganiga
-        # qarab g'olib deb e'lon qilmaymiz.
+    if game.phase in {GamePhase.FINISHED, GamePhase.STOPPED}:
         return VictoryResult(
-            False,
-            None,
-            "O'yin davom etmoqda.",
+            finished=True,
+            winner=game.winner,
+            reason="game_already_finished",
         )
 
-    @staticmethod
-    def _finish(
-        game: Game,
-        winner: str,
-        message: str,
-    ) -> VictoryResult:
-        game.finish(winner)
+    alive_players = game.alive_players
 
+    if not alive_players:
+        game.finish(
+            winner=None,
+            reason=GameEndReason.VICTORY,
+        )
         return VictoryResult(
-            True,
-            winner,
-            message,
+            finished=True,
+            winner=None,
+            reason="no_survivors",
         )
 
+    alive_teams = {
+        player.team
+        for player in alive_players
+        if player.team is not None
+    }
 
-def check_victory(game: Game) -> VictoryResult:
-    """G'alaba shartlarini tekshiruvchi tashqi funksiya."""
-    return GameVictory.check_victory(game)
+    # Mustaqil rollarning alohida g'alaba shartlari.
+    for player in alive_players:
+        if player.team != Team.MUSTAQIL:
+            continue
+
+        if player.role_id == "omon_qoluvchi":
+            # Omon qoluvchi tirik qolishi kerak.
+            # Boshqa jamoalar to'liq yo'qolmaguncha bu rol
+            # avtomatik g'olib deb belgilanmaydi.
+            continue
+
+        if player.role_id == "yollanma_qotil":
+            # Qotilning maxsus maqsadi keyinchalik kengaytiriladi.
+            continue
+
+        if player.role_id == "qasoskor":
+            # Qasoskor uchun nishon va qasos sharti alohida
+            # mexanizmda belgilanadi.
+            continue
+
+        if player.role_id == "soya_sayyohi":
+            # Yashirin sayyohning shaxsiy g'alabasi keyin
+            # alohida maqsad tizimi orqali tekshiriladi.
+            continue
+
+    # Jamoalar orasida faqat bitta jamoa qolgan bo'lsa,
+    # shu jamoa g'olib bo'ladi.
+    if len(alive_teams) == 1:
+        winner = next(iter(alive_teams))
+
+        game.finish(
+            winner=winner,
+            reason=GameEndReason.VICTORY,
+        )
+
+        return VictoryResult(
+            finished=True,
+            winner=winner,
+            reason="last_team_standing",
+        )
+
+    # Hech bir jamoa qolmagan, lekin tirik o'yinchilar
+    # jamoaga biriktirilmagan bo'lsa, o'yin davom etadi.
+    return VictoryResult(
+        finished=False,
+        winner=None,
+        reason="no_victory_yet",
+    )
+
+
+def finish_game(
+    game: GameState,
+    winner: Team | str | None,
+    reason: GameEndReason = GameEndReason.VICTORY,
+) -> VictoryResult:
+    """O'yinni yakunlash uchun umumiy funksiya."""
+
+    if game.phase in {GamePhase.FINISHED, GamePhase.STOPPED}:
+        return VictoryResult(
+            finished=True,
+            winner=game.winner,
+            reason="game_already_finished",
+        )
+
+    game.finish(
+        winner=winner,
+        reason=reason,
+    )
+
+    return VictoryResult(
+        finished=True,
+        winner=winner,
+        reason=reason.value,
+    )
     
