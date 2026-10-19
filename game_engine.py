@@ -1,395 +1,321 @@
 
+from __future__ import annotations
+
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Optional
-import secrets
-import time
+from typing import Any
+
+from game_resolver import GameResolutionError, GameResolver
+from game_state import GameEndReason, GamePhase, GameState
+from game_victory import VictoryResult, check_victory
+from role_engine import RoleAssignmentError, assign_roles
+from roles import Team
 
 
-class GamePhase(str, Enum):
-    LOBBY = "lobby"
-    ROLE_REVEAL = "role_reveal"
-    NIGHT = "night"
-    DAY = "day"
-    DISCUSSION = "discussion"
-    VOTING = "voting"
-    LAST_WORDS = "last_words"
-    FINISHED = "finished"
-    STOPPED = "stopped"
+class GameEngineError(Exception):
+    """THRONE o'yinini boshqarishdagi xatolar."""
 
 
-@dataclass
-class Player:
-    user_id: int
-    name: str
-    username: Optional[str] = None
-    role_id: Optional[str] = None
-    alive: bool = True
-    joined_at: float = field(default_factory=time.time)
-    last_words: Optional[str] = None
-    vote_target: Optional[int] = None
-    night_action: Optional[dict] = None
+@dataclass(slots=True)
+class EngineResult:
+    success: bool
+    phase: GamePhase
+    message: str
+    data: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class Game:
-    chat_id: int
-    creator_id: int
-    game_id: str = field(default_factory=lambda: secrets.token_hex(6))
-    phase: GamePhase = GamePhase.LOBBY
-    players: dict[int, Player] = field(default_factory=dict)
-    round_number: int = 0
-    created_at: float = field(default_factory=time.time)
-    phase_started_at: float = field(default_factory=time.time)
-    winner: Optional[str] = None
-    night_actions: list[dict] = field(default_factory=list)
-    votes: dict[int, int] = field(default_factory=dict)
-    history: list[str] = field(default_factory=list)
+class GameEngine:
+    """THRONE o'yinining asosiy boshqaruv markazi."""
 
-    MIN_PLAYERS = 7
-    MAX_PLAYERS = 36
-    LAST_WORDS_SECONDS = 30
+    def __init__(self, game: GameState) -> None:
+        self.game = game
+        self.resolver = GameResolver()
 
-    @property
-    def player_count(self) -> int:
-        return len(self.players)
+    def start_game(self) -> EngineResult:
+        """O'yinni boshlaydi va rollarni taqsimlaydi."""
 
-    @property
-    def alive_players(self) -> list[Player]:
-        return [
-            player
-            for player in self.players.values()
-            if player.alive
-        ]
+        if self.game.phase != GamePhase.LOBBY:
+            raise GameEngineError("O'yin lobby bosqichida emas.")
 
-    @property
-    def dead_players(self) -> list[Player]:
-        return [
-            player
-            for player in self.players.values()
-            if not player.alive
-        ]
-
-    def add_player(
-        self,
-        user_id: int,
-        name: str,
-        username: Optional[str] = None,
-    ) -> tuple[bool, str]:
-        if self.phase != GamePhase.LOBBY:
-            return False, "O'yinga qo'shilish vaqti tugagan."
-
-        if user_id in self.players:
-            return False, "Siz allaqachon o'yindasiz."
-
-        if self.player_count >= self.MAX_PLAYERS:
-            return False, "O'yinchilar soni maksimal chegaraga yetdi."
-
-        self.players[user_id] = Player(
-            user_id=user_id,
-            name=name,
-            username=username,
-        )
-
-        self.history.append(f"{name} o'yinga qo'shildi.")
-        return True, "Siz o'yinga muvaffaqiyatli qo'shildingiz."
-
-    def remove_player(self, user_id: int) -> tuple[bool, str]:
-        if self.phase != GamePhase.LOBBY:
-            return False, "Boshlangan o'yindan bu usulda chiqib bo'lmaydi."
-
-        player = self.players.pop(user_id, None)
-
-        if player is None:
-            return False, "O'yinchi topilmadi."
-
-        self.history.append(f"{player.name} o'yindan chiqdi.")
-        return True, "O'yindan chiqdingiz."
-
-    def can_start(
-        self,
-        requester_is_admin: bool,
-    ) -> tuple[bool, str]:
-        if not requester_is_admin:
-            return (
-                False,
-                "O'yinni faqat guruh administratori boshlashi mumkin.",
-            )
-
-        if self.phase != GamePhase.LOBBY:
-            return False, "O'yin allaqachon boshlangan yoki yakunlangan."
-
-        if self.player_count < self.MIN_PLAYERS:
-            return False, (
+        if not self.game.can_start:
+            raise GameEngineError(
                 f"O'yinni boshlash uchun kamida "
-                f"{self.MIN_PLAYERS} nafar o'yinchi kerak."
+                f"{self.game.min_players} nafar o'yinchi kerak."
             )
 
-        return True, "O'yinni boshlash mumkin."
+        try:
+            assign_roles(self.game)
+            self.game.start()
+        except (RoleAssignmentError, ValueError) as exc:
+            raise GameEngineError(
+                f"O'yinni boshlash amalga oshmadi: {exc}"
+            ) from exc
 
-    def start(
-        self,
-        requester_is_admin: bool,
-    ) -> tuple[bool, str]:
-        allowed, message = self.can_start(requester_is_admin)
-
-        if not allowed:
-            return False, message
-
-        self.phase = GamePhase.ROLE_REVEAL
-        self.phase_started_at = time.time()
-        self.round_number = 0
-        self.history.append("O'yin boshlandi.")
-
-        return True, "O'yin boshlandi. Rollarni taqsimlash mumkin."
-
-    def assign_role(self, user_id: int, role_id: str) -> bool:
-        if self.phase != GamePhase.ROLE_REVEAL:
-            return False
-
-        player = self.players.get(user_id)
-
-        if player is None:
-            return False
-
-        player.role_id = role_id
-        return True
-
-    def all_roles_assigned(self) -> bool:
-        return bool(self.players) and all(
-            player.role_id is not None
-            for player in self.players.values()
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="game_started",
+            data={
+                "game_id": self.game.game_id,
+                "player_count": self.game.player_count,
+                "round_number": self.game.round_number,
+            },
         )
 
-    def begin_night(self) -> tuple[bool, str]:
-        if self.phase not in (
+    def begin_night(self) -> EngineResult:
+        """Tungi bosqichni boshlaydi."""
+
+        self._require_running()
+
+        allowed = {
             GamePhase.ROLE_REVEAL,
             GamePhase.DAY,
             GamePhase.DISCUSSION,
             GamePhase.VOTING,
             GamePhase.LAST_WORDS,
-        ):
-            return False, "Hozir tunni boshlash mumkin emas."
+        }
 
-        if not self.all_roles_assigned():
-            return False, "Avval barcha o'yinchilarga rol berilishi kerak."
-
-        self.phase = GamePhase.NIGHT
-        self.round_number += 1
-        self.phase_started_at = time.time()
-        self.night_actions.clear()
-        self.votes.clear()
-
-        for player in self.players.values():
-            player.night_action = None
-            player.vote_target = None
-
-        self.history.append(f"{self.round_number}-tun boshlandi.")
-
-        return True, f"{self.round_number}-tun boshlandi."
-
-    def begin_day(self) -> tuple[bool, str]:
-        if self.phase != GamePhase.NIGHT:
-            return False, "Hozir tun bosqichi emas."
-
-        self.phase = GamePhase.DAY
-        self.phase_started_at = time.time()
-        self.history.append(f"{self.round_number}-kun boshlandi.")
-
-        return True, "Tong otdi. Kun bosqichi boshlandi."
-
-    def begin_discussion(self) -> tuple[bool, str]:
-        if self.phase != GamePhase.DAY:
-            return False, "Avval tong bosqichi yakunlanishi kerak."
-
-        self.phase = GamePhase.DISCUSSION
-        self.phase_started_at = time.time()
-        self.history.append("Muhokama boshlandi.")
-
-        return True, "Muhokama boshlandi."
-
-    def begin_voting(self) -> tuple[bool, str]:
-        if self.phase != GamePhase.DISCUSSION:
-            return False, "Avval muhokama bosqichi o'tishi kerak."
-
-        self.phase = GamePhase.VOTING
-        self.phase_started_at = time.time()
-        self.votes.clear()
-
-        for player in self.players.values():
-            player.vote_target = None
-
-        self.history.append("Ovoz berish boshlandi.")
-
-        return True, "Ovoz berish boshlandi."
-
-    def cast_vote(
-        self,
-        voter_id: int,
-        target_id: int,
-    ) -> tuple[bool, str]:
-        if self.phase != GamePhase.VOTING:
-            return False, "Hozir ovoz berish bosqichi emas."
-
-        voter = self.players.get(voter_id)
-        target = self.players.get(target_id)
-
-        if voter is None or not voter.alive:
-            return False, "Siz ovoz bera olmaysiz."
-
-        if target is None or not target.alive:
-            return False, "Tanlangan o'yinchi topilmadi yoki tirik emas."
-
-        if voter_id == target_id:
-            return False, "O'zingizga ovoz bera olmaysiz."
-
-        self.votes[voter_id] = target_id
-        voter.vote_target = target_id
-
-        return True, "Ovozingiz qabul qilindi."
-
-    def get_vote_results(self) -> dict[int, int]:
-        results: dict[int, int] = {}
-
-        for voter_id, target_id in self.votes.items():
-            voter = self.players.get(voter_id)
-            target = self.players.get(target_id)
-
-            if (
-                voter is not None
-                and voter.alive
-                and target is not None
-                and target.alive
-            ):
-                results[target_id] = results.get(target_id, 0) + 1
-
-        return results
-
-    def get_voting_winner(self) -> tuple[Optional[int], bool]:
-        results = self.get_vote_results()
-
-        if not results:
-            return None, False
-
-        highest_votes = max(results.values())
-
-        candidates = [
-            user_id
-            for user_id, votes in results.items()
-            if votes == highest_votes
-        ]
-
-        if len(candidates) != 1:
-            return None, True
-
-        return candidates[0], False
-
-    def eliminate_player(
-        self,
-        user_id: int,
-        reason: str = "O'yindan chiqarildi",
-    ) -> tuple[bool, str]:
-        player = self.players.get(user_id)
-
-        if player is None:
-            return False, "O'yinchi topilmadi."
-
-        if not player.alive:
-            return False, "Bu o'yinchi allaqachon o'yindan chiqqan."
-
-        player.alive = False
-        self.history.append(f"{player.name}: {reason}.")
-
-        return True, f"{player.name} o'yindan chiqarildi."
-
-    def start_last_words(
-        self,
-        user_id: int,
-    ) -> tuple[bool, str]:
-        if self.phase != GamePhase.VOTING:
-            return False, "Hozir oxirgi so'z bosqichi emas."
-
-        player = self.players.get(user_id)
-
-        if player is None or player.alive:
-            return False, "Oxirgi so'z faqat chiqarilgan o'yinchiga beriladi."
-
-        self.phase = GamePhase.LAST_WORDS
-        self.phase_started_at = time.time()
-
-        self.history.append(
-            f"{player.name} uchun oxirgi so'z bosqichi boshlandi."
-        )
-
-        return True, (
-            f"{player.name} uchun oxirgi so'z vaqti: "
-            f"{self.LAST_WORDS_SECONDS} soniya."
-        )
-
-    def save_last_words(
-        self,
-        user_id: int,
-        message: str,
-    ) -> tuple[bool, str]:
-        if self.phase != GamePhase.LAST_WORDS:
-            return False, "Hozir oxirgi so'z bosqichi emas."
-
-        player = self.players.get(user_id)
-
-        if player is None or player.alive:
-            return False, (
-                "Bu bosqichda faqat chiqarilgan o'yinchi yozishi mumkin."
+        if self.game.phase not in allowed:
+            raise GameEngineError(
+                "Hozir tungi bosqichni boshlash mumkin emas."
             )
 
-        if time.time() - self.phase_started_at > self.LAST_WORDS_SECONDS:
-            return False, "Oxirgi so'z uchun ajratilgan vaqt tugadi."
-
-        player.last_words = message.strip()[:1000]
-        self.history.append(f"{player.name} oxirgi so'zini aytdi.")
-
-        return True, "Oxirgi so'zingiz saqlandi."
-
-    def last_words_time_left(self) -> int:
-        elapsed = time.time() - self.phase_started_at
-
-        return max(
-            0,
-            self.LAST_WORDS_SECONDS - int(elapsed),
+        self.game.set_phase(
+            GamePhase.NIGHT,
+            self.game.night_duration_seconds,
         )
 
-    def finish(self, winner: str) -> tuple[bool, str]:
-        if self.phase in (
-            GamePhase.FINISHED,
-            GamePhase.STOPPED,
-        ):
-            return False, "O'yin allaqachon yakunlangan."
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="night_started",
+            data={
+                "round_number": self.game.round_number,
+                "duration_seconds": self.game.night_duration_seconds,
+            },
+        )
 
-        self.winner = winner
-        self.phase = GamePhase.FINISHED
-        self.phase_started_at = time.time()
+    def resolve_night(self) -> EngineResult:
+        """Tungi harakatlarni hisoblaydi va natijani qaytaradi."""
 
-        self.history.append(f"O'yin yakunlandi. G'olib: {winner}.")
+        self._require_running()
 
-        return True, f"O'yin yakunlandi. G'olib: {winner}."
+        if self.game.phase != GamePhase.NIGHT:
+            raise GameEngineError("Hozir tun bosqichi emas.")
 
-    def stop(
-        self,
-        requester_is_admin: bool,
-    ) -> tuple[bool, str]:
-        if not requester_is_admin:
-            return False, (
-                "O'yinni faqat guruh administratori to'xtata oladi."
+        try:
+            night_result = self.resolver.resolve_night(self.game)
+        except GameResolutionError as exc:
+            raise GameEngineError(str(exc)) from exc
+
+        victory = check_victory(self.game)
+
+        if victory.finished:
+            return EngineResult(
+                success=True,
+                phase=self.game.phase,
+                message="game_finished",
+                data={
+                    "winner": self._winner_value(victory.winner),
+                    "reason": victory.reason,
+                    "eliminated_player_ids": (
+                        night_result.eliminated_player_ids
+                    ),
+                },
             )
 
-        if self.phase in (
+        self.game.set_phase(
+            GamePhase.DAY,
+            self.game.discussion_duration_seconds,
+        )
+
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="night_resolved",
+            data={
+                "round_number": night_result.round_number,
+                "eliminated_player_ids": (
+                    night_result.eliminated_player_ids
+                ),
+                "protected_player_ids": (
+                    night_result.protected_player_ids
+                ),
+                "blocked_player_ids": (
+                    night_result.blocked_player_ids
+                ),
+                "investigation_results": (
+                    night_result.investigation_results
+                ),
+            },
+        )
+
+    def begin_discussion(self) -> EngineResult:
+        """Muhokama bosqichini boshlaydi."""
+
+        self._require_running()
+
+        if self.game.phase != GamePhase.DAY:
+            raise GameEngineError(
+                "Muhokama faqat kunduzgi bosqichda boshlanadi."
+            )
+
+        self.game.set_phase(
+            GamePhase.DISCUSSION,
+            self.game.discussion_duration_seconds,
+        )
+
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="discussion_started",
+            data={
+                "duration_seconds": (
+                    self.game.discussion_duration_seconds
+                ),
+            },
+        )
+
+    def begin_voting(self) -> EngineResult:
+        """Ovoz berish bosqichini boshlaydi."""
+
+        self._require_running()
+
+        if self.game.phase not in {
+            GamePhase.DAY,
+            GamePhase.DISCUSSION,
+        }:
+            raise GameEngineError(
+                "Ovoz berish bosqichini hozir boshlash mumkin emas."
+            )
+
+        self.game.set_phase(
+            GamePhase.VOTING,
+            self.game.voting_duration_seconds,
+        )
+
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="voting_started",
+            data={
+                "duration_seconds": self.game.voting_duration_seconds,
+                "alive_players": self.game.alive_count,
+            },
+        )
+
+    def begin_last_words(self, player_id: int) -> EngineResult:
+        """O'yinchiga so'nggi so'zlar vaqtini beradi."""
+
+        self._require_running()
+
+        if self.game.phase != GamePhase.VOTING:
+            raise GameEngineError(
+                "So'nggi so'zlar ovoz berishdan keyin boshlanadi."
+            )
+
+        player = self.game.get_player(player_id)
+
+        if player is None or not player.is_alive:
+            raise GameEngineError(
+                "Tanlangan o'yinchi mavjud emas yoki tirik emas."
+            )
+
+        self.game.last_words_player_id = player_id
+
+        self.game.set_phase(
+            GamePhase.LAST_WORDS,
+            self.game.last_words_duration_seconds,
+        )
+
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="last_words_started",
+            data={
+                "player_id": player_id,
+                "duration_seconds": (
+                    self.game.last_words_duration_seconds
+                ),
+            },
+        )
+
+    def finish_last_words(self) -> EngineResult:
+        """So'nggi so'zlardan keyin o'yin holatini tekshiradi."""
+
+        self._require_running()
+
+        if self.game.phase != GamePhase.LAST_WORDS:
+            raise GameEngineError(
+                "O'yin so'nggi so'zlar bosqichida emas."
+            )
+
+        self.game.last_words_player_id = None
+
+        victory = check_victory(self.game)
+
+        if victory.finished:
+            return EngineResult(
+                success=True,
+                phase=self.game.phase,
+                message="game_finished",
+                data={
+                    "winner": self._winner_value(victory.winner),
+                    "reason": victory.reason,
+                },
+            )
+
+        return self.begin_night()
+
+    def stop_game(self) -> EngineResult:
+        """Faol o'yinni to'xtatadi."""
+
+        if self.game.phase in {
             GamePhase.FINISHED,
             GamePhase.STOPPED,
-        ):
-            return False, "O'yin allaqachon yakunlangan."
+        }:
+            raise GameEngineError("O'yin allaqachon yakunlangan.")
 
-        self.phase = GamePhase.STOPPED
-        self.phase_started_at = time.time()
-        self.history.append("O'yin administrator tomonidan to'xtatildi.")
+        self.game.stop()
 
-        return True, "O'yin to'xtatildi."
-        
+        return EngineResult(
+            success=True,
+            phase=self.game.phase,
+            message="game_stopped",
+        )
+
+    def get_status(self) -> dict[str, Any]:
+        """O'yinning joriy holatini qaytaradi."""
+
+        return {
+            "game_id": self.game.game_id,
+            "chat_id": self.game.chat_id,
+            "phase": self.game.phase.value,
+            "round_number": self.game.round_number,
+            "player_count": self.game.player_count,
+            "alive_count": self.game.alive_count,
+            "winner": self._winner_value(self.game.winner),
+            "phase_deadline": self.game.phase_deadline,
+        }
+
+    def _require_running(self) -> None:
+        if not self.game.is_running:
+            raise GameEngineError("O'yin faol holatda emas.")
+
+    @staticmethod
+    def _winner_value(
+        winner: Team | str | None,
+    ) -> str | None:
+        if winner is None:
+            return None
+
+        if isinstance(winner, Team):
+            return winner.value
+
+        return str(winner)
+
+
+def create_engine(game: GameState) -> GameEngine:
+    """O'yin uchun boshqaruv obyektini yaratadi."""
+
+    return GameEngine(game)
+            
