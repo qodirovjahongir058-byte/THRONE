@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import asyncio
@@ -715,6 +714,7 @@ class GameController:
         await self.close()
 
 
+
 def create_game_controller(
     bot: Bot,
     database: Database,
@@ -734,5 +734,5 @@ def create_game_controller(
         voting=voting,
         actions=actions,
         partners=partners,
-            )
-        
+    )
+    
