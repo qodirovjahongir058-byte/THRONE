@@ -1,196 +1,118 @@
 
 from __future__ import annotations
 
-import os
+import asyncio
+import logging
+import sys
 
-from dataclasses import dataclass
-from pathlib import Path
+from aiogram import Bot, Dispatcher
+from aiogram.filters import Command, CommandStart
+from aiogram.types import Message
+
+from config import ConfigError, load_settings
+from database import Database
 
 
-class ConfigError(Exception):
-    """THRONE konfiguratsiyasi bilan bog'liq xato."""
+logger = logging.getLogger("throne")
 
 
-def _read_int(
-    name: str,
-    default: int,
-    minimum: int = 0,
-) -> int:
-    raw_value = os.getenv(name)
+def setup_logging(level: str) -> None:
+    logging.basicConfig(
+        level=getattr(logging, level),
+        format=(
+            "%(asctime)s | %(levelname)s | "
+            "%(name)s | %(message)s"
+        ),
+        stream=sys.stdout,
+    )
 
-    if raw_value is None or not raw_value.strip():
-        value = default
-    else:
-        try:
-            value = int(raw_value)
-        except ValueError as exc:
-            raise ConfigError(
-                f"{name} butun son bo'lishi kerak."
-            ) from exc
 
-    if value < minimum:
-        raise ConfigError(
-            f"{name} kamida {minimum} bo'lishi kerak."
+def create_dispatcher() -> Dispatcher:
+    dp = Dispatcher()
+
+    @dp.message(CommandStart())
+    async def start_command(message: Message) -> None:
+        await message.answer(
+            "👑 <b>THRONE qirolligiga xush kelibsiz!</b>\n\n"
+            "Bu yerda sizni strategiya, ittifoqlar va "
+            "qirollik uchun kurash kutmoqda.\n\n"
+            "📜 Buyruqlar:\n"
+            "/start — bot bilan tanishish\n"
+            "/help — yordam olish\n\n"
+            "⚔️ Guruhdagi o'yin funksiyalari keyingi "
+            "integratsiya bosqichida ulanadi.",
+            parse_mode="HTML",
         )
 
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class GameSettings:
-    min_players: int = 7
-    max_players: int = 50
-
-    lobby_duration_seconds: int = 1200
-    night_duration_seconds: int = 90
-    discussion_duration_seconds: int = 120
-    voting_duration_seconds: int = 60
-    last_words_duration_seconds: int = 30
-
-    max_revotes: int = 1
-
-    def validate(self) -> None:
-        if self.min_players < 1:
-            raise ConfigError(
-                "min_players kamida 1 bo'lishi kerak."
-            )
-
-        if self.max_players < self.min_players:
-            raise ConfigError(
-                "max_players min_players dan kichik bo'lmasin."
-            )
-
-        durations = {
-            "lobby_duration_seconds":
-                self.lobby_duration_seconds,
-            "night_duration_seconds":
-                self.night_duration_seconds,
-            "discussion_duration_seconds":
-                self.discussion_duration_seconds,
-            "voting_duration_seconds":
-                self.voting_duration_seconds,
-            "last_words_duration_seconds":
-                self.last_words_duration_seconds,
-        }
-
-        for name, value in durations.items():
-            if value < 1:
-                raise ConfigError(
-                    f"{name} kamida 1 soniya bo'lishi kerak."
-                )
-
-        if self.max_revotes < 0:
-            raise ConfigError(
-                "max_revotes manfiy bo'lishi mumkin emas."
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class Settings:
-    bot_token: str
-    creator_id: int
-    database_path: str
-    game: GameSettings
-    log_level: str = "INFO"
-    timezone: str = "UTC"
-
-    @classmethod
-    def from_env(cls) -> Settings:
-        token = os.getenv("BOT_TOKEN", "").strip()
-
-        if not token:
-            raise ConfigError(
-                "BOT_TOKEN topilmadi. "
-                "Uni muhit o'zgaruvchilarida sozlang."
-            )
-
-        creator_id = _read_int(
-            "CREATOR_ID",
-            default=0,
-            minimum=1,
+    @dp.message(Command("help"))
+    async def help_command(message: Message) -> None:
+        await message.answer(
+            "📜 <b>THRONE — YORDAM</b>\n\n"
+            "/start — boshlash\n"
+            "/help — buyruqlar haqida ma'lumot\n\n"
+            "👑 Guruh o'yinini boshqarish buyruqlari "
+            "o'yin handlerlari ulangandan keyin ishlaydi.",
+            parse_mode="HTML",
         )
 
-        database_path = os.getenv(
-            "DATABASE_PATH",
-            "data/throne.db",
-        ).strip()
+    @dp.message(Command("id"))
+    async def id_command(message: Message) -> None:
+        user_id = message.from_user.id if message.from_user else 0
+        chat_id = message.chat.id
 
-        if not database_path:
-            database_path = "data/throne.db"
-
-        game = GameSettings(
-            min_players=_read_int(
-                "MIN_PLAYERS", 7, 1
-            ),
-            max_players=_read_int(
-                "MAX_PLAYERS", 50, 1
-            ),
-            lobby_duration_seconds=_read_int(
-                "LOBBY_DURATION_SECONDS", 1200, 1
-            ),
-            night_duration_seconds=_read_int(
-                "NIGHT_DURATION_SECONDS", 90, 1
-            ),
-            discussion_duration_seconds=_read_int(
-                "DISCUSSION_DURATION_SECONDS", 120, 1
-            ),
-            voting_duration_seconds=_read_int(
-                "VOTING_DURATION_SECONDS", 60, 1
-            ),
-            last_words_duration_seconds=_read_int(
-                "LAST_WORDS_DURATION_SECONDS", 30, 1
-            ),
-            max_revotes=_read_int(
-                "MAX_REVOTES", 1, 0
-            ),
+        await message.answer(
+            f"👤 Telegram ID: <code>{user_id}</code>\n"
+            f"💬 Chat ID: <code>{chat_id}</code>",
+            parse_mode="HTML",
         )
 
-        game.validate()
+    return dp
 
-        log_level = os.getenv(
-            "LOG_LEVEL", "INFO"
-        ).strip().upper()
 
-        allowed_log_levels = {
-            "DEBUG",
-            "INFO",
-            "WARNING",
-            "ERROR",
-            "CRITICAL",
-        }
+async def main() -> None:
+    settings = load_settings()
+    setup_logging(settings.log_level)
 
-        if log_level not in allowed_log_levels:
-            raise ConfigError(
-                "LOG_LEVEL qiymati noto'g'ri."
-            )
+    logger.info("THRONE ishga tushmoqda...")
 
-        timezone = os.getenv(
-            "TIMEZONE", "UTC"
-        ).strip() or "UTC"
+    database: Database | None = None
+    bot: Bot | None = None
 
-        return cls(
-            bot_token=token,
-            creator_id=creator_id,
-            database_path=database_path,
-            game=game,
-            log_level=log_level,
-            timezone=timezone,
+    try:
+        database = Database(
+            db_path=settings.database_path,
         )
 
-    def prepare_directories(self) -> None:
-        """Ma'lumotlar bazasi papkasini yaratadi."""
-        path = Path(self.database_path)
+        bot = Bot(
+            token=settings.bot_token,
+        )
 
-        if str(path.parent) not in ("", "."):
-            path.parent.mkdir(
-                parents=True,
-                exist_ok=True,
-            )
+        dp = create_dispatcher()
+
+        logger.info("Ma'lumotlar bazasi tayyor.")
+        logger.info("Telegram polling boshlanmoqda.")
+
+        await dp.start_polling(
+            bot,
+            close_bot_session=False,
+        )
+
+    finally:
+        if database is not None:
+            database.close()
+
+        if bot is not None:
+            await bot.session.close()
+
+        logger.info("THRONE bot to'xtatildi.")
 
 
-def load_settings() -> Settings:
-    """Sozlamalarni yuklaydi va tekshiradi."""
-    settings = Settings.from_env()
-    settings.prepare_directories()
-    return settings
-    
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (ConfigError, ValueError) as exc:
+        print(f"Konfiguratsiya xatosi: {exc}")
+        raise SystemExit(1)
+    except KeyboardInterrupt:
+        print("THRONE bot qo'lda to'xtatildi.")
+        
