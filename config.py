@@ -1,118 +1,146 @@
 
 from __future__ import annotations
 
-import asyncio
-import logging
-import sys
+import os
+from dataclasses import dataclass
+from pathlib import Path
 
-from aiogram import Bot, Dispatcher
-from aiogram.filters import Command, CommandStart
-from aiogram.types import Message
-
-from config import ConfigError, load_settings
-from database import Database
+from dotenv import load_dotenv
 
 
-logger = logging.getLogger("throne")
+class ConfigError(Exception):
+    """THRONE konfiguratsiyasidagi xatolar."""
 
 
-def setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level),
-        format=(
-            "%(asctime)s | %(levelname)s | "
-            "%(name)s | %(message)s"
-        ),
-        stream=sys.stdout,
-    )
+@dataclass(frozen=True, slots=True)
+class GameSettings:
+    min_players: int = 7
+    max_players: int = 50
+    lobby_duration_seconds: int = 1200
+    night_duration_seconds: int = 90
+    discussion_duration_seconds: int = 120
+    voting_duration_seconds: int = 60
+    last_words_duration_seconds: int = 30
+    max_revotes: int = 1
+
+    def validate(self) -> None:
+        if not 2 <= self.min_players <= self.max_players <= 50:
+            raise ConfigError(
+                "O'yinchilar soni noto'g'ri. "
+                "min_players kamida 2, max_players esa "
+                "min_players dan 50 gacha bo'lishi kerak."
+            )
+
+        durations = {
+            "LOBBY_DURATION_SECONDS": self.lobby_duration_seconds,
+            "NIGHT_DURATION_SECONDS": self.night_duration_seconds,
+            "DISCUSSION_DURATION_SECONDS": self.discussion_duration_seconds,
+            "VOTING_DURATION_SECONDS": self.voting_duration_seconds,
+            "LAST_WORDS_DURATION_SECONDS": self.last_words_duration_seconds,
+        }
+
+        for name, value in durations.items():
+            if value <= 0:
+                raise ConfigError(
+                    f"{name} musbat son bo'lishi kerak."
+                )
+
+        if self.max_revotes < 0:
+            raise ConfigError("MAX_REVOTES manfiy bo'lishi mumkin emas.")
 
 
-def create_dispatcher() -> Dispatcher:
-    dp = Dispatcher()
+@dataclass(frozen=True, slots=True)
+class Settings:
+    bot_token: str
+    creator_id: int
+    database_path: str = "data/throne.db"
+    game: GameSettings = GameSettings()
+    log_level: str = "INFO"
+    timezone: str = "UTC"
 
-    @dp.message(CommandStart())
-    async def start_command(message: Message) -> None:
-        await message.answer(
-            "👑 <b>THRONE qirolligiga xush kelibsiz!</b>\n\n"
-            "Bu yerda sizni strategiya, ittifoqlar va "
-            "qirollik uchun kurash kutmoqda.\n\n"
-            "📜 Buyruqlar:\n"
-            "/start — bot bilan tanishish\n"
-            "/help — yordam olish\n\n"
-            "⚔️ Guruhdagi o'yin funksiyalari keyingi "
-            "integratsiya bosqichida ulanadi.",
-            parse_mode="HTML",
+    @classmethod
+    def from_env(cls) -> Settings:
+        load_dotenv()
+
+        token = os.getenv("BOT_TOKEN", "").strip()
+        if not token or token == "your_telegram_bot_token_here":
+            raise ConfigError(
+                "BOT_TOKEN sozlanmagan. Haqiqiy tokenni "
+                "hosting Environment Variables bo'limiga kiriting."
+            )
+
+        creator_id_text = os.getenv("CREATOR_ID", "").strip()
+        try:
+            creator_id = int(creator_id_text)
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(
+                "CREATOR_ID haqiqiy Telegram ID raqami bo'lishi kerak."
+            ) from exc
+
+        if creator_id <= 0:
+            raise ConfigError("CREATOR_ID musbat son bo'lishi kerak.")
+
+        def read_int(name: str, default: int) -> int:
+            raw = os.getenv(name, str(default)).strip()
+            try:
+                return int(raw)
+            except ValueError as exc:
+                raise ConfigError(
+                    f"{name} butun son bo'lishi kerak."
+                ) from exc
+
+        game = GameSettings(
+            min_players=read_int("MIN_PLAYERS", 7),
+            max_players=read_int("MAX_PLAYERS", 50),
+            lobby_duration_seconds=read_int(
+                "LOBBY_DURATION_SECONDS", 1200
+            ),
+            night_duration_seconds=read_int(
+                "NIGHT_DURATION_SECONDS", 90
+            ),
+            discussion_duration_seconds=read_int(
+                "DISCUSSION_DURATION_SECONDS", 120
+            ),
+            voting_duration_seconds=read_int(
+                "VOTING_DURATION_SECONDS", 60
+            ),
+            last_words_duration_seconds=read_int(
+                "LAST_WORDS_DURATION_SECONDS", 30
+            ),
+            max_revotes=read_int("MAX_REVOTES", 1),
+        )
+        game.validate()
+
+        log_level = os.getenv("LOG_LEVEL", "INFO").strip().upper()
+        if log_level not in {
+            "DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"
+        }:
+            raise ConfigError("LOG_LEVEL noto'g'ri.")
+
+        database_path = os.getenv(
+            "DATABASE_PATH", "data/throne.db"
+        ).strip()
+        if not database_path:
+            raise ConfigError("DATABASE_PATH bo'sh bo'lishi mumkin emas.")
+
+        return cls(
+            bot_token=token,
+            creator_id=creator_id,
+            database_path=database_path,
+            game=game,
+            log_level=log_level,
+            timezone=os.getenv("TIMEZONE", "UTC").strip() or "UTC",
         )
 
-    @dp.message(Command("help"))
-    async def help_command(message: Message) -> None:
-        await message.answer(
-            "📜 <b>THRONE — YORDAM</b>\n\n"
-            "/start — boshlash\n"
-            "/help — buyruqlar haqida ma'lumot\n\n"
-            "👑 Guruh o'yinini boshqarish buyruqlari "
-            "o'yin handlerlari ulangandan keyin ishlaydi.",
-            parse_mode="HTML",
+    def prepare_directories(self) -> None:
+        Path(self.database_path).parent.mkdir(
+            parents=True,
+            exist_ok=True,
         )
 
-    @dp.message(Command("id"))
-    async def id_command(message: Message) -> None:
-        user_id = message.from_user.id if message.from_user else 0
-        chat_id = message.chat.id
 
-        await message.answer(
-            f"👤 Telegram ID: <code>{user_id}</code>\n"
-            f"💬 Chat ID: <code>{chat_id}</code>",
-            parse_mode="HTML",
-        )
-
-    return dp
-
-
-async def main() -> None:
-    settings = load_settings()
-    setup_logging(settings.log_level)
-
-    logger.info("THRONE ishga tushmoqda...")
-
-    database: Database | None = None
-    bot: Bot | None = None
-
-    try:
-        database = Database(
-            db_path=settings.database_path,
-        )
-
-        bot = Bot(
-            token=settings.bot_token,
-        )
-
-        dp = create_dispatcher()
-
-        logger.info("Ma'lumotlar bazasi tayyor.")
-        logger.info("Telegram polling boshlanmoqda.")
-
-        await dp.start_polling(
-            bot,
-            close_bot_session=False,
-        )
-
-    finally:
-        if database is not None:
-            database.close()
-
-        if bot is not None:
-            await bot.session.close()
-
-        logger.info("THRONE bot to'xtatildi.")
-
-
-if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except (ConfigError, ValueError) as exc:
-        print(f"Konfiguratsiya xatosi: {exc}")
-        raise SystemExit(1)
-    except KeyboardInterrupt:
-        print("THRONE bot qo'lda to'xtatildi.")
-        
+def load_settings() -> Settings:
+    settings = Settings.from_env()
+    settings.prepare_directories()
+    return settings
+    
