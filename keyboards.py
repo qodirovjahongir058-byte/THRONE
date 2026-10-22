@@ -1,134 +1,114 @@
-from __future__ import annotations
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
+
+from locales import LANGUAGES, get_text
 
 
-def lobby_keyboard() -> InlineKeyboardMarkup:
-    """Keyboard displayed while the game is waiting for players."""
-
-    builder = InlineKeyboardBuilder()
-
-    builder.row(
-        InlineKeyboardButton(
-            text="⚔️ Qo‘shilish",
-            callback_data="throne:join",
-        ),
-        InlineKeyboardButton(
-            text="👥 O‘yinchilar",
-            callback_data="throne:players",
-        ),
+def main_menu(language: str = "uz") -> ReplyKeyboardMarkup:
+    """Create the main menu shown below the message."""
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=get_text("play", language)),
+                KeyboardButton(text=get_text("profile", language)),
+            ],
+            [
+                KeyboardButton(text=get_text("shop", language)),
+                KeyboardButton(text=get_text("language", language)),
+            ],
+            [
+                KeyboardButton(text=get_text("how_to_play", language)),
+                KeyboardButton(text=get_text("roles", language)),
+            ],
+            [
+                KeyboardButton(text=get_text("clan", language)),
+                KeyboardButton(text=get_text("ratings", language)),
+            ],
+            [
+                KeyboardButton(text=get_text("help", language)),
+            ],
+        ],
+        resize_keyboard=True,
+        input_field_placeholder=get_text("play", language),
     )
 
-    builder.row(
+
+def language_menu() -> InlineKeyboardMarkup:
+    """Create buttons for all 20 supported languages."""
+    buttons = [
         InlineKeyboardButton(
-            text="👑 O‘yinni boshlash",
-            callback_data="throne:start",
-        ),
-        InlineKeyboardButton(
-            text="🛑 Bekor qilish",
-            callback_data="throne:stop",
-        ),
-    )
-
-    return builder.as_markup()
-
-
-def night_action_keyboard(
-    action_buttons: list[tuple[str, str]],
-) -> InlineKeyboardMarkup:
-    """Build a keyboard for available night actions."""
-
-    builder = InlineKeyboardBuilder()
-
-    for text, callback_data in action_buttons:
-        builder.button(
-            text=text,
-            callback_data=callback_data,
+            text=name,
+            callback_data=f"lang:{code}",
         )
+        for code, name in LANGUAGES.items()
+    ]
 
-    builder.adjust(2)
+    rows = [
+        buttons[index:index + 2]
+        for index in range(0, len(buttons), 2)
+    ]
 
-    return builder.as_markup()
-
-
-def target_keyboard(
-    targets: list[tuple[int, str]],
-    callback_prefix: str,
-) -> InlineKeyboardMarkup:
-    """Build a keyboard containing alive player targets."""
-
-    builder = InlineKeyboardBuilder()
-
-    for user_id, display_name in targets:
-        builder.button(
-            text=display_name,
-            callback_data=f"{callback_prefix}:{user_id}",
-        )
-
-    builder.adjust(1)
-
-    return builder.as_markup()
-
-
-def voting_keyboard(
-    targets: list[tuple[int, str]],
-) -> InlineKeyboardMarkup:
-    """Build the daytime voting keyboard."""
-
-    builder = InlineKeyboardBuilder()
-
-    for user_id, display_name in targets:
-        builder.button(
-            text=f"⚖️ {display_name}",
-            callback_data=f"throne:vote:{user_id}",
-        )
-
-    builder.adjust(1)
-
-    return builder.as_markup()
-
-
-def last_words_keyboard() -> InlineKeyboardMarkup:
-    """Keyboard shown during the last-words phase."""
-
-    builder = InlineKeyboardBuilder()
-
-    builder.row(
-        InlineKeyboardButton(
-            text="🕯️ So‘nggi so‘zim",
-            callback_data="throne:last_words",
-        ),
-    )
-
-    return builder.as_markup()
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def confirm_keyboard(
-    confirm_callback: str,
-    cancel_callback: str,
+    action: str,
+    language: str = "uz",
 ) -> InlineKeyboardMarkup:
-    """Generic confirmation keyboard."""
-
-    builder = InlineKeyboardBuilder()
-
-    builder.row(
-        InlineKeyboardButton(
-            text="✅ Tasdiqlash",
-            callback_data=confirm_callback,
-        ),
-        InlineKeyboardButton(
-            text="❌ Bekor qilish",
-            callback_data=cancel_callback,
-        ),
-    )
-
-    return builder.as_markup()
-
-
-def empty_keyboard() -> InlineKeyboardMarkup:
-    """Return an empty inline keyboard."""
+    """Create a confirmation keyboard for a supported action."""
+    if not action or ":" in action:
+        raise ValueError("action bo‘sh bo‘lmasligi yoki ':' saqlamasligi kerak")
 
     return InlineKeyboardMarkup(
-        inline_keyboard=[],
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Ha",
+                    callback_data=f"confirm:{action}",
+                ),
+                InlineKeyboardButton(
+                    text="❌ Yo‘q",
+                    callback_data=f"cancel:{action}",
+                ),
+            ]
+        ]
     )
+
+
+def clan_exit_keyboard() -> InlineKeyboardMarkup:
+    """Create the button used to leave a clan."""
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🚪 Klandan chiqish",
+                    callback_data="clan:leave",
+                )
+            ]
+        ]
+    )
+
+
+def clan_join_keyboard(
+    clan_owner_id: int,
+) -> InlineKeyboardMarkup:
+    """Create a join button for a clan owner's invitation."""
+    if clan_owner_id <= 0:
+        raise ValueError("Klan egasining ID raqami musbat bo‘lishi kerak")
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛡️ Klaniga qo‘shilish",
+                    callback_data=f"clan:join:{clan_owner_id}",
+                )
+            ]
+        ]
+    )
+    
