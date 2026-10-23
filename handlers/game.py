@@ -8,18 +8,20 @@ from aiogram.types import (
     Message,
 )
 
+from roles import (
+    MIN_PLAYERS,
+    MAX_PLAYERS,
+    assign_roles,
+)
+
 router = Router()
 
 # Hozircha lobbylar xotirada saqlanadi.
-# Keyin ma'lumotlar bazasiga ko'chiramiz.
+# Bot qayta ishga tushsa, lobbylar yo'qoladi.
 LOBBIES: dict[int, dict] = {}
-
-MAX_PLAYERS = 30
-MIN_PLAYERS = 4
 
 
 def lobby_keyboard(group_id: int) -> InlineKeyboardMarkup:
-    """Lobby tugmalari."""
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -39,28 +41,30 @@ def lobby_keyboard(group_id: int) -> InlineKeyboardMarkup:
 
 
 def lobby_text(lobby: dict) -> str:
-    """Lobbydagi o‘yinchilar ro‘yxati."""
     players = lobby["players"]
+
     names = [
         f"• {player['name']}"
         for player in players.values()
     ]
-
-    player_list = "\n".join(names) if names else "Hali hech kim qo‘shilmadi."
+    player_list = (
+        "\n".join(names)
+        if names
+        else "Hali hech kim qo‘shilmadi."
+    )
 
     return (
         "👑 <b>THRONE — YANGI O‘YIN</b>\n\n"
         "🏰 Qirollik uchun kurash boshlanish arafasida!\n"
-        "⚔️ O‘yinga qo‘shilish uchun tugmani bosing.\n\n"
+        "⚔️ Qo‘shilish tugmasini bosing.\n\n"
         f"👥 O‘yinchilar: <b>{len(players)}/{MAX_PLAYERS}</b>\n"
         f"🎮 Boshlash uchun kamida {MIN_PLAYERS} o‘yinchi kerak.\n\n"
-        f"<b>Ro‘yxat:</b>\n{player_list}"
+        f"<b>Ishtirokchilar:</b>\n{player_list}"
     )
 
 
 @router.message(Command("NewGame", ignore_case=True))
 async def new_game_handler(message: Message) -> None:
-    """Guruhda yangi lobby ochish."""
     if message.chat.type not in ("group", "supergroup"):
         await message.answer(
             "🏰 Yangi o‘yinni ochish uchun botni guruhda ishlating."
@@ -75,15 +79,17 @@ async def new_game_handler(message: Message) -> None:
         )
         return
 
+    creator_id = (
+        message.from_user.id
+        if message.from_user
+        else None
+    )
+
     LOBBIES[group_id] = {
         "players": {},
         "status": "lobby",
         "message_id": None,
-        "creator_id": (
-            message.from_user.id
-            if message.from_user
-            else None
-        ),
+        "creator_id": creator_id,
     }
 
     sent = await message.answer(
@@ -96,7 +102,6 @@ async def new_game_handler(message: Message) -> None:
 
 @router.callback_query(F.data.startswith("game:join:"))
 async def join_game_handler(callback: CallbackQuery) -> None:
-    """O‘yinchining lobbyga qo‘shilishi."""
     if (
         callback.from_user is None
         or callback.message is None
@@ -160,7 +165,6 @@ async def join_game_handler(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("game:start:"))
 async def start_game_handler(callback: CallbackQuery) -> None:
-    """Guruh administratori yoki yaratuvchi lobby o‘yinini boshlaydi."""
     if (
         callback.from_user is None
         or callback.message is None
@@ -195,8 +199,6 @@ async def start_game_handler(callback: CallbackQuery) -> None:
         return
 
     user_id = callback.from_user.id
-
-    # Lobby yaratuvchisi yoki guruh administratori boshlashi mumkin.
     is_creator = user_id == lobby["creator_id"]
     is_admin = False
 
@@ -211,30 +213,104 @@ async def start_game_handler(callback: CallbackQuery) -> None:
 
     if not is_creator and not is_admin:
         await callback.answer(
-            "⛔ O‘yinni faqat lobby yaratuvchisi "
-            "yoki guruh administratori boshlashi mumkin.",
+            "⛔ Lobby yaratuvchisi yoki guruh administratori "
+            "o‘yinni boshlashi mumkin.",
             show_alert=True,
         )
         return
 
-    if len(lobby["players"]) < MIN_PLAYERS:
+    players = lobby["players"]
+
+    if len(players) < MIN_PLAYERS:
         await callback.answer(
-            f"👥 O‘yinni boshlash uchun kamida "
-            f"{MIN_PLAYERS} o‘yinchi kerak.",
+            f"👥 Kamida {MIN_PLAYERS} o‘yinchi kerak.",
             show_alert=True,
         )
         return
 
-    # Bu bosqichda faqat boshlanish holati belgilanadi.
-    # Rollarni taqsimlash keyingi bosqichda qo‘shiladi.
+    if len(players) > MAX_PLAYERS:
+        await callback.answer(
+            "❌ O‘yinchilar soni ruxsat etilgan chegaradan oshdi.",
+            show_alert=True,
+        )
+        return
+
+    # Ikki marta boshlashga urinishning oldini olish.
+    lobby["status"] = "assigning"
+
+    try:
+        assignments = assign_roles(list(players.keys()))
+    except (ValueError, IndexError):
+        lobby["status"] = "lobby"
+        await callback.answer(
+            "⚠️ Rollarni taqsimlashda xatolik yuz berdi.",
+            show_alert=True,
+        )
+        return
+
+    delivered = []
+    failed = []
+
+    # Rollar faqat o'yinchilarning shaxsiy chatiga yuboriladi.
+    for player_id, role in assignments.items():
+        try:
+            await callback.bot.send_message(
+                chat_id=player_id,
+                text=(
+                    "👑 <b>THRONE — SIZNING ROLINGIZ</b>\n\n"
+                    f"🎭 Rol: <b>{role.name}</b>\n"
+                    f"🛡️ Jamoa: <b>{role.faction}</b>\n\n"
+                    f"📜 {role.description}\n\n"
+                    "🤫 Roolingizni guruhda oshkor qilmang."
+                ),
+            )
+            delivered.append(player_id)
+        except Exception:
+            failed.append(player_id)
+
+    if failed:
+        # O'yin boshlanmaydi; yuborilgan vaqtinchalik
+        # xabarlar ham bekor qilinadi.
+        for player_id in delivered:
+            try:
+                await callback.bot.send_message(
+                    chat_id=player_id,
+                    text=(
+                        "⚠️ <b>O‘YIN BOSHLANMADI</b>\n\n"
+                        "Rol xabari sinov tariqasida yuborilgan edi. "
+                        "Bu rol hozircha amal qilmaydi."
+                    ),
+                )
+            except Exception:
+                pass
+
+        lobby["status"] = "lobby"
+
+        await callback.message.answer(
+            "⚠️ Ayrim o‘yinchilarga shaxsiy xabar yuborilmadi.\n\n"
+            "Ular botga shaxsiy chatda /start yuborishsin. "
+            "So‘ng o‘yinni qayta boshlashga urinib ko‘ring."
+        )
+        await callback.answer(
+            "❌ Barcha rollar yuborilmadi.",
+            show_alert=True,
+        )
+        return
+
     lobby["status"] = "starting"
+    lobby["assignments"] = {
+        player_id: role.id
+        for player_id, role in assignments.items()
+    }
 
     await callback.message.edit_text(
-        "👑 <b>THRONE — O‘YIN BOSHLANMOQDA!</b>\n\n"
-        f"👥 O‘yinchilar: <b>{len(lobby['players'])}</b>\n"
-        "🎭 Keyingi bosqichda rollar taqsimlanadi.",
+        "👑 <b>THRONE — ROLLAR TAQSIMLANDI!</b>\n\n"
+        f"👥 O‘yinchilar: <b>{len(players)}</b>\n"
+        "🎭 Har bir ishtirokchiga roli shaxsiy xabarda yuborildi.\n\n"
+        "⏳ Keyingi bosqichda o‘yin fazalari va tungi "
+        "harakatlar ulanadi.",
         reply_markup=None,
     )
 
-    await callback.answer("⚔️ O‘yin boshlanishi tasdiqlandi!")
-        
+    await callback.answer("👑 Rollar yuborildi!")
+            
