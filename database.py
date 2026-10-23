@@ -1,6 +1,7 @@
 
 import aiosqlite
 from pathlib import Path
+from datetime import date, datetime, timedelta
 
 DEFAULT_LANGUAGE = "uz"
 
@@ -30,19 +31,33 @@ async def init_db(database_path: str) -> None:
                 username TEXT,
                 first_name TEXT NOT NULL DEFAULT '',
                 language TEXT NOT NULL DEFAULT 'uz',
-                oltin INTEGER NOT NULL DEFAULT 0
-                    CHECK (oltin >= 0),
-                almaz INTEGER NOT NULL DEFAULT 0
-                    CHECK (almaz >= 0),
-                koin INTEGER NOT NULL DEFAULT 0
-                    CHECK (koin >= 0),
-                xp INTEGER NOT NULL DEFAULT 0
-                    CHECK (xp >= 0),
-                level INTEGER NOT NULL DEFAULT 1
-                    CHECK (level >= 1),
+                oltin INTEGER NOT NULL DEFAULT 0 CHECK (oltin >= 0),
+                almaz INTEGER NOT NULL DEFAULT 0 CHECK (almaz >= 0),
+                koin INTEGER NOT NULL DEFAULT 0 CHECK (koin >= 0),
+                xp INTEGER NOT NULL DEFAULT 0 CHECK (xp >= 0),
+                level INTEGER NOT NULL DEFAULT 1 CHECK (level >= 1),
+                daily_last_claim TEXT,
+                daily_streak INTEGER NOT NULL DEFAULT 0
+                    CHECK (daily_streak >= 0),
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             )
         """)
+
+        # Migration for databases created by older versions.
+        cursor = await db.execute("PRAGMA table_info(users)")
+        columns = {row[1] for row in await cursor.fetchall()}
+        await cursor.close()
+
+        if "daily_last_claim" not in columns:
+            await db.execute(
+                "ALTER TABLE users ADD COLUMN daily_last_claim TEXT"
+            )
+
+        if "daily_streak" not in columns:
+            await db.execute("""
+                ALTER TABLE users ADD COLUMN daily_streak INTEGER
+                NOT NULL DEFAULT 0
+            """)
 
         await db.execute("""
             CREATE TABLE IF NOT EXISTS groups (
@@ -108,7 +123,7 @@ async def set_language(
     user_id: int,
     language: str,
 ) -> bool:
-    """Set a supported language. Return False for invalid input."""
+    """Set a supported language."""
     language = language.strip().lower()
 
     if language not in SUPPORTED_LANGUAGES:
@@ -138,7 +153,6 @@ async def add_balance(
     if currency not in CURRENCIES or amount <= 0:
         return False
 
-    # The column name is selected only from the fixed allowlist above.
     async with aiosqlite.connect(database_path) as db:
         cursor = await db.execute(
             f"UPDATE users SET {currency} = {currency} + ? "
@@ -150,4 +164,93 @@ async def add_balance(
         await cursor.close()
 
     return updated > 0
+
+
+DAILY_REWARDS = [
+    {"oltin": 100, "xp": 0},
+    {"oltin": 150, "xp": 0},
+    {"oltin": 200, "xp": 10},
+    {"oltin": 250, "xp": 0},
+    {"oltin": 350, "xp": 20},
+    {"oltin": 500, "xp": 0},
+    {"oltin": 750, "xp": 30},
+]
+
+
+async def claim_daily_bonus(
+    database_path: str,
+    user_id: int,
+    today: date | None = None,
+) -> dict:
+    """
+    Claim a daily reward once per calendar day.
+
+    Returns:
+        {"ok": True, "day": int, "oltin": int, "xp": int}
+    or {"ok": False, "reason": "..."}.
+    """
+    claim_date = today or datetime.now().date()
+    today_text = claim_date.isoformat()
+
+    async with aiosqlite.connect(database_path) as db:
+        await db.execute("BEGIN IMMEDIATE")
+        db.row_factory = aiosqlite.Row
+
+        cursor = await db.execute(
+            "SELECT daily_last_claim, daily_streak "
+            "FROM users WHERE user_id = ?",
+            (user_id,),
+        )
+        row = await cursor.fetchone()
+        await cursor.close()
+
+        if row is None:
+            await db.rollback()
+            return {"ok": False, "reason": "user_not_found"}
+
+        last_claim_text = row["daily_last_claim"]
+        streak = row["daily_streak"] or 0
+
+        if last_claim_text == today_text:
+            await db.rollback()
+            return {"ok": False, "reason": "already_claimed"}
+
+        if last_claim_text:
+            try:
+                last_claim = date.fromisoformat(last_claim_text)
+            except ValueError:
+                last_claim = None
+
+            if last_claim == claim_date - timedelta(days=1):
+                streak = (streak % 7) + 1
+            else:
+                streak = 1
+        else:
+            streak = 1
+
+        reward = DAILY_REWARDS[streak - 1]
+
+        await db.execute("""
+            UPDATE users
+            SET oltin = oltin + ?,
+                xp = xp + ?,
+                daily_last_claim = ?,
+                daily_streak = ?
+            WHERE user_id = ?
+        """, (
+            reward["oltin"],
+            reward["xp"],
+            today_text,
+            streak,
+            user_id,
+        ))
+
+        await db.commit()
+
+    return {
+        "ok": True,
+        "day": streak,
+        "oltin": reward["oltin"],
+        "xp": reward["xp"],
+    }
     
