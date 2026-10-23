@@ -9,8 +9,37 @@ from aiogram.types import (
 from locales import LANGUAGES, get_text
 
 
+DAILY_BONUS_LABELS = {
+    "uz": "🎁 Kunlik bonus",
+    "ru": "🎁 Ежедневный бонус",
+    "en": "🎁 Daily bonus",
+    "tr": "🎁 Günlük bonus",
+    "ar": "🎁 المكافأة اليومية",
+    "ky": "🎁 Күнүмдүк бонус",
+    "kk": "🎁 Күнделікті бонус",
+    "tg": "🎁 Бонуси ҳаррӯза",
+    "fr": "🎁 Bonus quotidien",
+    "de": "🎁 Tagesbonus",
+    "es": "🎁 Bono diario",
+    "az": "🎁 Gündəlik bonus",
+    "pt": "🎁 Bônus diário",
+    "it": "🎁 Bonus giornaliero",
+    "zh": "🎁 每日奖励",
+    "ja": "🎁 デイリーボーナス",
+    "ko": "🎁 일일 보너스",
+    "hi": "🎁 दैनिक बोनस",
+    "id": "🎁 Bonus harian",
+    "uk": "🎁 Щоденний бонус",
+}
+
+
 def main_menu(language: str = "uz") -> ReplyKeyboardMarkup:
-    """Create the main menu shown below the message."""
+    """Create the main menu, including the daily bonus button."""
+    daily_bonus = DAILY_BONUS_LABELS.get(
+        language,
+        DAILY_BONUS_LABELS["uz"],
+    )
+
     return ReplyKeyboardMarkup(
         keyboard=[
             [
@@ -19,17 +48,18 @@ def main_menu(language: str = "uz") -> ReplyKeyboardMarkup:
             ],
             [
                 KeyboardButton(text=get_text("shop", language)),
+                KeyboardButton(text=daily_bonus),
+            ],
+            [
                 KeyboardButton(text=get_text("language", language)),
-            ],
-            [
                 KeyboardButton(text=get_text("how_to_play", language)),
+            ],
+            [
                 KeyboardButton(text=get_text("roles", language)),
-            ],
-            [
                 KeyboardButton(text=get_text("clan", language)),
-                KeyboardButton(text=get_text("ratings", language)),
             ],
             [
+                KeyboardButton(text=get_text("ratings", language)),
                 KeyboardButton(text=get_text("help", language)),
             ],
         ],
@@ -62,17 +92,31 @@ def confirm_keyboard(
 ) -> InlineKeyboardMarkup:
     """Create a confirmation keyboard for a supported action."""
     if not action or ":" in action:
-        raise ValueError("action bo‘sh bo‘lmasligi yoki ':' saqlamasligi kerak")
+        raise ValueError(
+            "action bo‘sh bo‘lmasligi yoki ':' saqlamasligi kerak"
+        )
+
+    yes_text = {
+        "uz": "✅ Ha",
+        "ru": "✅ Да",
+        "en": "✅ Yes",
+    }.get(language, "✅ Ha")
+
+    no_text = {
+        "uz": "❌ Yo‘q",
+        "ru": "❌ Нет",
+        "en": "❌ No",
+    }.get(language, "❌ Yo‘q")
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Ha",
+                    text=yes_text,
                     callback_data=f"confirm:{action}",
                 ),
                 InlineKeyboardButton(
-                    text="❌ Yo‘q",
+                    text=no_text,
                     callback_data=f"cancel:{action}",
                 ),
             ]
@@ -99,7 +143,9 @@ def clan_join_keyboard(
 ) -> InlineKeyboardMarkup:
     """Create a join button for a clan owner's invitation."""
     if clan_owner_id <= 0:
-        raise ValueError("Klan egasining ID raqami musbat bo‘lishi kerak")
+        raise ValueError(
+            "Klan egasining ID raqami musbat bo‘lishi kerak"
+        )
 
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -110,5 +156,5 @@ def clan_join_keyboard(
                 )
             ]
         ]
-    )
+)
     
