@@ -173,5 +173,5 @@ async def menu_handler(message: Message) -> None:
             f"🪙 Oltin: <b>+{result['oltin']}</b>\n"
             f"✨ Tajriba: <b>+{result['xp']} XP</b>\n\n"
             "👑 Ertaga yana kelib, keyingi mukofotni oling!"
-    )
+                          )
         
