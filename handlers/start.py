@@ -4,7 +4,12 @@ from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, Message
 
 from config import load_config
-from database import ensure_user, get_user, set_language
+from database import (
+    claim_daily_bonus,
+    ensure_user,
+    get_user,
+    set_language,
+)
 from keyboards import language_menu, main_menu
 from locales import get_text, LANGUAGES
 
@@ -15,10 +20,9 @@ def database_path() -> str:
     return load_config().database_path
 
 
-@router.message(CommandStart())
-async def start_handler(message: Message) -> None:
+async def get_or_create_user(message: Message) -> dict | None:
     if message.from_user is None:
-        return
+        return None
 
     user = message.from_user
     db_path = database_path()
@@ -29,9 +33,16 @@ async def start_handler(message: Message) -> None:
         username=user.username,
         first_name=user.first_name or "",
     )
+    return await get_user(db_path, user.id)
 
-    profile = await get_user(db_path, user.id)
-    language = profile["language"] if profile else "uz"
+
+@router.message(CommandStart())
+async def start_handler(message: Message) -> None:
+    profile = await get_or_create_user(message)
+    if profile is None:
+        return
+
+    language = profile["language"] or "uz"
 
     welcome = (
         "👑 <b>THRONE olamiga xush kelibsiz!</b>\n\n"
@@ -78,7 +89,7 @@ async def language_callback(callback: CallbackQuery) -> None:
         )
         return
 
-    if callback.message:
+    if callback.message and isinstance(callback.message, Message):
         await callback.message.answer(
             get_text("language", language),
             reply_markup=main_menu(language),
@@ -92,33 +103,22 @@ async def menu_handler(message: Message) -> None:
     if message.from_user is None or not message.text:
         return
 
-    user = message.from_user
-    db_path = database_path()
-
-    profile = await get_user(db_path, user.id)
-
+    profile = await get_or_create_user(message)
     if profile is None:
-        await ensure_user(
-            database_path=db_path,
-            user_id=user.id,
-            username=user.username,
-            first_name=user.first_name or "",
-        )
-        profile = await get_user(db_path, user.id)
+        return
 
-    language = profile["language"] if profile else "uz"
+    language = profile["language"] or "uz"
     text = message.text.strip()
 
     if text == get_text("profile", language):
-        if profile:
-            await message.answer(
-                "👑 <b>SHAXSIY KABINET</b>\n\n"
-                f"🪙 Oltin: <b>{profile['oltin']}</b>\n"
-                f"💎 Almaz: <b>{profile['almaz']}</b>\n"
-                f"🪙 Koin: <b>{profile['koin']}</b>\n"
-                f"⭐ Daraja: <b>{profile['level']}</b>\n"
-                f"✨ Tajriba: <b>{profile['xp']} XP</b>"
-            )
+        await message.answer(
+            "👑 <b>SHAXSIY KABINET</b>\n\n"
+            f"🪙 Oltin: <b>{profile['oltin']}</b>\n"
+            f"💎 Almaz: <b>{profile['almaz']}</b>\n"
+            f"🪙 Koin: <b>{profile['koin']}</b>\n"
+            f"⭐ Daraja: <b>{profile['level']}</b>\n"
+            f"✨ Tajriba: <b>{profile['xp']} XP</b>"
+        )
 
     elif text == get_text("language", language):
         await message.answer(
@@ -148,8 +148,30 @@ async def menu_handler(message: Message) -> None:
         await message.answer(get_text("help", language))
 
     elif text in ("🎁 Kunlik bonus", "🎁 Daily bonus"):
-        await message.answer(
-            "🎁 <b>KUNLIK BONUS</b>\n\n"
-            "Kunlik bonus tizimi hali ulanmagan. Tez orada ishga tushadi! 👑"
+        result = await claim_daily_bonus(
+            database_path(),
+            message.from_user.id,
         )
+
+        if not result["ok"]:
+            if result["reason"] == "already_claimed":
+                await message.answer(
+                    "🎁 <b>BUGUNGI BONUS OLINGAN!</b>\n\n"
+                    "👑 Siz bugungi mukofotingizni olib bo‘lgansiz. "
+                    "Ertaga yana keling!"
+                )
+            else:
+                await message.answer(
+                    "⚠️ Bonusni olishda xatolik yuz berdi. "
+                    "Iltimos, qayta urinib ko‘ring."
+                )
+            return
+
+        await message.answer(
+            "🎁 <b>KUNLIK BONUS OLINDI!</b>\n\n"
+            f"🗓️ Ketma-ket kun: <b>{result['day']}/7</b>\n"
+            f"🪙 Oltin: <b>+{result['oltin']}</b>\n"
+            f"✨ Tajriba: <b>+{result['xp']} XP</b>\n\n"
+            "👑 Ertaga yana kelib, keyingi mukofotni oling!"
+    )
         
