@@ -8,6 +8,8 @@ from aiogram.enums import ParseMode
 
 from config import load_config
 from database import init_db
+from handlers.start import router as start_router
+from handlers.game import router as game_router
 
 
 async def main() -> None:
@@ -17,7 +19,6 @@ async def main() -> None:
     )
 
     config = load_config()
-
     await init_db(config.database_path)
 
     bot = Bot(
@@ -28,6 +29,8 @@ async def main() -> None:
     )
 
     dp = Dispatcher()
+    dp.include_router(start_router)
+    dp.include_router(game_router)
 
     try:
         logging.info("THRONE boti ishga tushmoqda...")
